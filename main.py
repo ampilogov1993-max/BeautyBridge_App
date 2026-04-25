@@ -19,8 +19,7 @@ SYSTEM_PROMPT = """
 англійською.
 3. ПРІОРИТЕТ: Завжди намагайся закрити ранок (10:00 - 12:00).
 
-ВІЛЬНІ СЛОТИ:
-{slots}
+ВІЛЬНІ СЛОТИ: уточни в адміністратора
 """
 
 @app.get("/")
@@ -40,22 +39,34 @@ async def verify_webhook(
 @app.post("/webhook")
 async def handle_messages(request: Request):
     data = await request.json()
-    user_message = data.get("message_text", "")
-    free_slots = data.get("slots", "потрібно уточнити в адміністратора")
+    print(f"Отримано дані від Meta: {data}")
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": 
-SYSTEM_PROMPT.format(slots=free_slots)},
-                {"role": "user", "content": user_message}
-            ]
-        )
-        ai_reply = response.choices[0].message.content
-        return {"status": "success", "reply": ai_reply}
+        entry = data.get("entry", [])
+        for e in entry:
+            messaging = e.get("messaging", [])
+            for m in messaging:
+                sender_id = m.get("sender", {}).get("id")
+                message = m.get("message", {})
+                text = message.get("text", "")
+
+                if text and sender_id:
+                    print(f"Повідомлення від {sender_id}: {text}")
+
+                    response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": text}
+                        ]
+                    )
+                    ai_reply = response.choices[0].message.content
+                    print(f"AI відповідь: {ai_reply}")
+
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        print(f"Помилка: {e}")
+
+    return {"status": "ok"}
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
