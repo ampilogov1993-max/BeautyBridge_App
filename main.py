@@ -1,8 +1,8 @@
 import os
 import requests
 import threading
-import sys
 import re
+import sys
 from flask import Flask, request
 from openai import OpenAI
 from datetime import datetime, timedelta
@@ -31,21 +31,27 @@ class BinotelSession:
         self.xsrf_token = None
 
     def login(self):
-        self.is_logged_in = False
         login_url = "https://my.binotel.ua/"
         headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'referer': 'https://my.binotel.ua/'
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
         }
         try:
-            log("--- КРОК 1: ОТРИМАННЯ ТОКЕНА ---")
+            log("--- [КРОК 1] ІНІЦІАЛІЗАЦІЯ ---")
             res = self.session.get(login_url, headers=headers, timeout=10)
             
-            # Шукаємо прихований токен
+            # Шукаємо токен в коді
             token_match = re.search(r'name=["\']_token["\']\s+value=["\'](.+?)["\']', res.text)
             csrf_token = token_match.group(1) if token_match else None
             
-            log(f"Токен форми: {'Знайдено' if csrf_token else 'ВІДСУТНІЙ'}")
+            # Якщо в коді немає, беремо з куків (XSRF-TOKEN)
+            if not csrf_token:
+                cookies = self.session.cookies.get_dict()
+                if 'XSRF-TOKEN' in cookies:
+                    csrf_token = urllib.parse.unquote(cookies['XSRF-TOKEN'])
+                    log("Токен знайдено в Cookies!")
+
+            log(f"Токен: {'ОК' if csrf_token else 'ВІДСУТНІЙ'}")
 
             payload = {
                 'logining[email]': BINOTEL_EMAIL,
@@ -55,33 +61,29 @@ class BinotelSession:
             if csrf_token:
                 payload['_token'] = csrf_token
 
-            log(f"--- КРОК 2: ВІДПРАВКА ПАРОЛЯ (Email: {BINOTEL_EMAIL}) ---")
+            log("--- [КРОК 2] ВІДПРАВКА ПАРОЛЯ ---")
             auth_res = self.session.post(login_url, data=payload, headers=headers, allow_redirects=True)
             
-            cookies = self.session.cookies.get_dict()
-            if 'bocrm_production_session' in cookies:
-                log("=== УСПІХ! БОТ У СИСТЕМІ ===")
-                if 'XSRF-TOKEN' in cookies:
-                    self.xsrf_token = urllib.parse.unquote(cookies['XSRF-TOKEN'])
+            final_cookies = self.session.cookies.get_dict()
+            if 'bocrm_production_session' in final_cookies:
+                log("=== УСПІХ! ВХІД ВИКОНАНО ===")
                 self.is_logged_in = True
+                if 'XSRF-TOKEN' in final_cookies:
+                    self.xsrf_token = urllib.parse.unquote(final_cookies['XSRF-TOKEN'])
                 return True
             
-            # Якщо не зайшли, шукаємо текст помилки на сторінці
-            error_match = re.search(r'class="alert alert-danger".+?>(.+?)<', auth_res.text, re.S)
-            if error_match:
-                log(f"BINOTEL ПИШЕ: {error_match.group(1).strip()}")
-            else:
-                log("ПОМИЛКА: Сесія не створена. Причина невідома (можливо, бан IP або Captcha).")
+            log("ЛОГІН НЕ ВДАВСЯ. Можливо, Captcha або блок IP.")
             return False
         except Exception as e:
             log(f"Помилка входу: {e}")
             return False
 
     def get_slots(self, target_date=None, retry=0):
-        if retry > 1: return "Зараз уточню розклад!"
+        if retry > 1: return "Уточнюю графік у адміна..."
+        
         if not self.is_logged_in:
             if not self.login():
-                return "База тимчасово недоступна. Залиште номер!"
+                return "База на оновленні. Залиште номер!"
 
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
@@ -96,11 +98,19 @@ class BinotelSession:
         }
 
         try:
+            log(f"Запит розкладу на {target_date}...")
             res = self.session.get(url, headers=headers, timeout=12)
+            
             if res.status_code == 200:
                 data = res.json()
-                masters = {m['id']: m.get('name', 'Спеціаліст') for m in data.get('specialists', [])}
-                
+                # Збираємо імена майстрів
+                masters = {}
+                for key in ["specialists", "employees", "staff"]:
+                    if key in data:
+                        for m in data[key]:
+                            masters[m['id']] = m.get('name', 'Майстер')
+                        break
+
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
                     slots = []
                     for s in data["freeTimes"]:
@@ -108,15 +118,17 @@ class BinotelSession:
                         n = masters.get(s.get('specialistId'), "Майстер")
                         slots.append(f"- {t} (Майстер: {n})")
                     return f"Вільні місця на {target_date}:\n" + "\n".join(sorted(list(set(slots))))
-                return f"На {target_date} вільних місць немає."
+                return f"На {target_date} все зайнято."
             
             if res.status_code == 401:
+                log("401: Сесія злетіла.")
                 self.is_logged_in = False
                 return self.get_slots(target_date, retry + 1)
-            return "Зараз уточню графік!"
+            
+            return "Зараз уточню!"
         except Exception as e:
             log(f"Помилка CRM: {e}")
-            return "Технічна пауза в базі."
+            return "База оновлюється..."
 
 crm_manager = BinotelSession()
 
@@ -131,8 +143,9 @@ def process_message(sender_id, user_text):
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
     if sender_id not in user_sessions:
+        log(f"Новий клієнт. Йду в CRM...")
         crm_data = crm_manager.get_slots(target_date)
-        full_p = f"Ти адмін Rozmary. Кажи коротко. РОЗКЛАД ({target_date}):\n{crm_data}"
+        full_p = f"Ти адмін салону Rozmary. Відповідай коротко. РОЗКЛАД ({target_date}):\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_p}]
     
     user_sessions[sender_id].append({"role": "user", "content": user_text})
@@ -142,6 +155,7 @@ def process_message(sender_id, user_text):
         reply = res.choices[0].message.content
         user_sessions[sender_id].append({"role": "assistant", "content": reply})
         send_message(sender_id, reply)
+        log("Відповідь надіслана клієнту.")
     except Exception as e:
         log(f"OpenAI Error: {e}")
 
