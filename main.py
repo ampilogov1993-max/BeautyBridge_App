@@ -40,25 +40,23 @@ class BinotelAPI:
         self.base_url = "https://api.binotel.com/api/2.0"
 
     def get_free_slots(self, date_str):
-        log(f"--- ЗАПИТ ДО API 2.0 (Дата: {date_str}) ---")
+        log(f"--- ЗАПИТ З ПІДПИСОМ (K + S + J) ---")
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
         
-        # Використовуємо 9970 як ЧИСЛО (integer)
         request_data = {
             "branchId": 9970,
             "startDate": date_str
         }
         
-        # 1. Формуємо JSON без пробілів, ключі за алфавітом
+        # 1. Формуємо JSON без пробілів
         json_data = json.dumps(request_data, separators=(',', ':'), sort_keys=True)
         
-        # 2. ФОРМУЛА ПІДПИСУ: MD5(SECRET + KEY + JSON)
-        # Це стандарт для багатьох модулів Binotel 2.0
-        signature_raw = self.secret + self.key + json_data
+        # 2. ТВІЙ ВАРІАНТ: KEY + SECRET + JSON
+        signature_raw = self.key + self.secret + json_data
         signature = hashlib.md5(signature_raw.encode('utf-8')).hexdigest()
         
         log(f"Рядок для підпису: {json_data}")
-        log(f"Підпис (S+K+J): {signature[:10]}...")
+        log(f"MD5 (K+S+J): {signature}")
 
         payload = {
             "key": self.key,
@@ -74,24 +72,24 @@ class BinotelAPI:
                 data = response.json()
                 if data.get('status') == 'error':
                     log(f"API Error: {data.get('message')}")
-                    return "Зараз уточню розклад у адміністратора!"
+                    return "Зараз адміністратор уточнює розклад у майстрів..."
 
-                masters = {m['id']: m.get('name', 'Спеціаліст') for m in data.get('specialists', [])}
+                masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
                 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
                     slots = []
                     for s in data["freeTimes"]:
                         time = s['startTime'].split(' ')[1]
-                        name = masters.get(s.get('specialistId'), "Майстер")
-                        slots.append(f"- {time} ({name})")
-                    return f"На {date_str} є такі вікна:\n" + "\n".join(sorted(list(set(slots))))
+                        name = masters.get(s.get('specialistId'), "Спеціаліст")
+                        slots.append(f"- {time} (Майстер: {name})")
+                    return f"На {date_str} є такі місця:\n" + "\n".join(sorted(list(set(slots))))
                 return f"На {date_str} вільних місць не знайдено."
             
-            log(f"API Error {response.status_code}: {response.text}")
+            log(f"Помилка {response.status_code}: {response.text}")
             return "Зараз адміністратор перевірить графік!"
         except Exception as e:
-            log(f"Помилка API: {e}")
-            return "Оновлюю базу, зачекайте хвилину."
+            log(f"Критична помилка: {e}")
+            return "Зачекайте, оновлюю базу."
 
 crm = BinotelAPI(BINOTEL_KEY, BINOTEL_SECRET)
 
@@ -104,12 +102,10 @@ def process_message(sid, text):
     target = (today + timedelta(days=1)).strftime("%Y-%m-%d") if "завтр" in text.lower() else today.strftime("%Y-%m-%d")
 
     if sid not in user_sessions:
-        send_tg_notification(f"Новий клієнт в Instagram!\nТекст: {text}")
-        log(f"Тягну дані CRM...")
+        send_tg_notification(f"Клієнт в Instagram: {text}")
+        log(f"Запит CRM...")
         crm_data = crm.get_free_slots(target)
-        
-        system_content = f"Ти адміністратор Rozmary у Львові. Відповідай коротко. РОЗКЛАД: {crm_data}"
-        user_sessions[sid] = [{"role": "system", "content": system_content}]
+        user_sessions[sid] = [{"role": "system", "content": f"Ти адмін Rozmary. РОЗКЛАД: {crm_data}"}]
     
     user_sessions[sid].append({"role": "user", "content": text})
     try:
@@ -117,7 +113,6 @@ def process_message(sid, text):
         reply = res.choices[0].message.content
         user_sessions[sid].append({"role": "assistant", "content": reply})
         send_instagram_msg(sid, reply)
-        log("Відповідь надіслана.")
     except Exception as e:
         log(f"AI Error: {e}")
 
