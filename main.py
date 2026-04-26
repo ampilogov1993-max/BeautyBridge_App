@@ -120,4 +120,4 @@ def process_message(sender_id, user_text):
     user_sessions[sender_id].append({"role": "user", "content": user_text})
     
     if len(user_sessions[sender_id]) > 11:
-        user_sessions[sender_id] = [user_sessions[sender_id
+        user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
