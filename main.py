@@ -1,7 +1,6 @@
 import os
 import requests
 import threading
-import re
 import sys
 from flask import Flask, request
 from openai import OpenAI
@@ -14,7 +13,7 @@ def log(message):
     print(message, flush=True)
     sys.stdout.flush()
 
-# --- КЛЮЧІ ---
+# --- КЛЮЧІ З RAILWAY ---
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -33,59 +32,50 @@ class BinotelSession:
     def login(self):
         self.is_logged_in = False
         login_url = "https://my.binotel.ua/"
+        
+        # Імітуємо реальний браузер на 100%
         headers = {
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             'accept-language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://my.binotel.ua',
             'referer': 'https://my.binotel.ua/'
         }
+        
         try:
-            log("--- ЗАПУСК АВТОРИЗАЦІЇ ---")
+            log("--- СПРОБА АВТОРИЗАЦІЇ (ЧИСТИЙ ВХІД) ---")
             
-            # 1. Отримуємо сторінку та куки
-            init_res = self.session.get(login_url, headers=headers, timeout=10)
+            # 1. Спочатку заходимо на головну, щоб отримати початкові куки (XSRF-TOKEN)
+            self.session.get(login_url, headers=headers, timeout=10)
             
-            # Шукаємо токен (пробуємо кілька варіантів)
-            token_match = re.search(r'name=["\']_token["\']\s+value=["\'](.+?)["\']', init_res.text)
-            if not token_match:
-                token_match = re.search(r'value=["\'](.+?)["\']\s+name=["\']_token["\']', init_res.text)
-            
-            csrf_token = token_match.group(1) if token_match else None
-            log(f"Токен форми: {'Знайдено' if csrf_token else 'НЕ ЗНАЙДЕНО'}")
-
-            # 2. Формуємо Payload точно як у браузері
+            # 2. Дані для входу (використовуємо твої знайдені поля)
             payload = {
                 'logining[email]': BINOTEL_EMAIL,
                 'logining[password]': BINOTEL_PASSWORD,
                 'logining[submit]': 'Увійти'
             }
-            if csrf_token:
-                payload['_token'] = csrf_token
 
             # 3. Відправляємо пароль
-            auth_res = self.session.post(login_url, data=payload, headers=headers, allow_redirects=True)
+            # allow_redirects=True важливо, щоб ми пройшли через 302 редірект
+            response = self.session.post(login_url, data=payload, headers=headers, allow_redirects=True)
             
-            # ДІАГНОСТИКА: що бачить бот після натискання "Увійти"
-            final_url = auth_res.url
-            content = auth_res.text.lower()
+            # ПЕРЕВІРКА: чи з'явилася кука сесії Binotel?
+            cookies = self.session.cookies.get_dict()
+            log(f"Отримані куки: {list(cookies.keys())}")
             
-            if "logout" in content or "bocrm" in content or "f/bookon" in content:
-                log("=== УСПІХ! БОТ ЗАЙШОВ У СИСТЕМУ ===")
-                # Отримуємо XSRF токен для подальших запитів
-                cookies = self.session.cookies.get_dict()
+            if 'bocrm_production_session' in cookies:
+                log("=== ПЕРЕМОГА! СЕСІЯ ВСТАНОВЛЕНА ===")
                 if 'XSRF-TOKEN' in cookies:
                     self.xsrf_token = urllib.parse.unquote(cookies['XSRF-TOKEN'])
                 self.is_logged_in = True
                 return True
-            else:
-                log(f"ПОМИЛКА ВХОДУ. Бот зупинився на: {final_url}")
-                # Перевіряємо чи є помилка на сторінці
-                if "invalid" in content or "невірний" in content or "error" in content:
-                    log("Схоже, Binotel каже, що логін або пароль невірні!")
-                return False
-                
+            
+            log("ПОМИЛКА: Сесія не створена. Перевір BINOTEL_EMAIL та PASSWORD!")
+            return False
+            
         except Exception as e:
-            log(f"Критична помилка при логіні: {e}")
+            log(f"Помилка входу: {e}")
             return False
 
     def get_slots(self, target_date=None, retry=0):
@@ -99,6 +89,7 @@ class BinotelSession:
             target_date = datetime.now().strftime("%Y-%m-%d")
             
         url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId=9970&startDate={target_date}"
+        
         headers = {
             'accept': 'application/json, text/plain, */*',
             'x-requested-with': 'XMLHttpRequest',
@@ -110,6 +101,7 @@ class BinotelSession:
         try:
             log(f"Запит розкладу на {target_date}...")
             res = self.session.get(url, headers=headers, timeout=12)
+            log(f"Статус відповіді CRM: {res.status_code}")
             
             if res.status_code == 200:
                 data = res.json()
@@ -127,10 +119,10 @@ class BinotelSession:
                         n = masters.get(s.get('specialistId'), "Майстер")
                         slots.append(f"- {t} (Майстер: {n})")
                     return f"Вільні місця на {target_date}:\n" + "\n".join(sorted(list(set(slots))))
-                return f"На {target_date} вільних місць немає."
+                return f"На {target_date} все зайнято."
             
             if res.status_code == 401:
-                log("Сесія відхилена. Перелогінююсь...")
+                log("401: Сесія протухла. Спроба перелогіну...")
                 self.is_logged_in = False
                 return self.get_slots(target_date, retry + 1)
             
@@ -144,7 +136,7 @@ crm_manager = BinotelSession()
 SYSTEM_PROMPT = """
 Ти — адміністратор салону "Rozmary". Відповідай коротко.
 Пропонуй ТІЛЬКИ час і майстрів з розкладу.
-Якщо даних немає, кажи: "Зараз якраз уточнюю графік у майстрів, хвилиночку!"
+Наприкінці кажи: "Зараз передам вашу заявку адміну!"
 """
 
 def send_message(recipient_id, text):
@@ -158,7 +150,7 @@ def process_message(sender_id, user_text):
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
     if sender_id not in user_sessions:
-        log(f"Клієнт {sender_id}. Тягну дані...")
+        log(f"Запит від {sender_id}. Тягну дані...")
         crm_data = crm_manager.get_slots(target_date)
         full_p = f"{SYSTEM_PROMPT}\n\nРОЗКЛАД ({target_date}):\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_p}]
