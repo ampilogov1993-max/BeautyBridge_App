@@ -108,4 +108,4 @@ def webhook():
                         if sender_id not in user_sessions:
                             # Отримуємо свіжі слоти з CRM ТІЛЬКИ на початку нового діалогу
                             crm_data = get_crm_slots()
-                            full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬ
+                            full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
