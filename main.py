@@ -2,7 +2,6 @@ import os
 import requests
 import threading
 import sys
-import json
 from flask import Flask, request
 from openai import OpenAI
 from datetime import datetime, timedelta
@@ -17,12 +16,8 @@ def log(msg):
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-# API БІНОТЕЛЯ
 BINOTEL_KEY = os.environ.get("BINOTEL_API_KEY")
 BINOTEL_SECRET = os.environ.get("BINOTEL_API_SECRET")
-
-# ТЕЛЕГРАМ ДЛЯ СПОВІЩЕНЬ
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -33,47 +28,55 @@ def send_tg_notification(text):
     """Сповіщення адміна в Телеграм"""
     if TG_TOKEN and TG_CHAT_ID:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge Info:\n{text}"})
+        try:
+            res = requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge Info:\n{text}"})
+            log(f"TG Status: {res.status_code}")
+        except Exception as e:
+            log(f"TG Error: {e}")
 
 class BinotelAPI:
-    """Робота з офіційним API Binotel Bookon"""
+    """Робота з офіційним API Binotel Bookon (Версія 2.0)"""
     def __init__(self, key, secret):
         self.key = key
         self.secret = secret
-        self.base_url = "https://api.binotel.com/v1"
+        # Офіційна базова адреса Binotel API 2.0
+        self.base_url = "https://api.binotel.com/api/2.0"
 
     def get_free_slots(self, date_str):
-        """Запит вільних місць через офіційний API"""
-        log(f"--- ЗАПИТ ДО API BINOTEL (Дата: {date_str}) ---")
+        log(f"--- ЗАПИТ ДО API BINOTEL 2.0 (Дата: {date_str}) ---")
         
-        # Офіційний формат запиту Binotel: key + password (secret) + requestData
+        # Ендпоінт обов'язково має закінчуватися на .json
+        url = f"{self.base_url}/bookon/get-free-times-for-day.json"
+        
         payload = {
             "key": self.key,
-            "password": self.secret,
+            "password": self.secret, # Binotel приймає secret як password у простих запитах
             "requestData": {
                 "branchId": 9970,
                 "startDate": date_str
             }
         }
         
-        # Ендпоінт для отримання вільних місць у Bookon
-        url = f"{self.base_url}/bookon/get-free-times-for-day"
-        
         try:
-            response = requests.post(url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=12)
             log(f"Binotel API Status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 
-                # Парсимо майстрів
+                # Binotel повертає 'status': 'success' або 'error'
+                if data.get('status') == 'error':
+                    log(f"Binotel API Business Error: {data}")
+                    return "Зараз уточню розклад у адміністратора!"
+
+                # Збираємо майстрів
                 masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
                 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
                     slots = []
                     for s in data["freeTimes"]:
                         time = s['startTime'].split(' ')[1]
-                        master_name = masters.get(s.get('specialistId'), "Майстер")
+                        master_name = masters.get(s.get('specialistId'), "Спеціаліст")
                         slots.append(f"- {time} (Майстер: {master_name})")
                     
                     result = "\n".join(sorted(list(set(slots))))
@@ -81,44 +84,34 @@ class BinotelAPI:
                 
                 return f"На {date_str} вільних місць не знайдено."
             
-            log(f"Помилка API: {response.text}")
+            log(f"Помилка API (404/500): {response.text}")
             return "Зараз уточню розклад у адміністратора!"
             
         except Exception as e:
             log(f"Критична помилка API: {e}")
             return "Трохи зачекайте, оновлюю графік."
 
-# Створюємо об'єкт API
 crm = BinotelAPI(BINOTEL_KEY, BINOTEL_SECRET)
-
-SYSTEM_PROMPT = """
-Ти — привітний адміністратор салону краси "Rozmary" у Львові. 
-Твоя мета: допомогти клієнту обрати час.
-1. Використовуй ТІЛЬКИ ті вільні місця, які бачиш у даних.
-2. Пропонуй спочатку ранок (10:00-12:00).
-3. Наприкінці діалогу обов'язково скажи: "Я передала вашу заявку адміністратору, вона зараз напише вам для підтвердження!"
-"""
 
 def send_instagram_msg(recipient_id, text):
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
     requests.post(url, json={"recipient": {"id": recipient_id}, "message": {"text": text}})
 
 def process_message(sender_id, user_text):
-    # Логіка дати
     today_dt = datetime.now()
     target_date = today_dt.strftime("%Y-%m-%d")
     if "завтр" in user_text.lower():
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Сповіщення в ТГ про новий запит
     if sender_id not in user_sessions:
-        send_tg_notification(f"Новий клієнт в Instagram!\nПитання: {user_text}")
+        # Відправляємо сповіщення в ТГ про нового клієнта
+        send_tg_notification(f"Новий клієнт в Instagram!\nТекст: {user_text}")
         
-        log(f"Тягну дані з API на {target_date}...")
+        log(f"Запит розкладу на {target_date}...")
         crm_data = crm.get_free_slots(target_date)
         
         user_sessions[sender_id] = [
-            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nРОЗКЛАД З БАЗИ:\n{crm_data}"}
+            {"role": "system", "content": f"Ти адміністратор Rozmary. Відповідай коротко. РОЗКЛАД:\n{crm_data}"}
         ]
     
     user_sessions[sender_id].append({"role": "user", "content": user_text})
@@ -131,10 +124,8 @@ def process_message(sender_id, user_text):
         )
         ai_reply = response.choices[0].message.content
         user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
-        
         send_instagram_msg(sender_id, ai_reply)
-        log("Відповідь відправлена клієнту.")
-        
+        log("Відповідь успішно відправлена.")
     except Exception as e:
         log(f"OpenAI Error: {e}")
 
