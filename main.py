@@ -27,6 +27,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 user_sessions = {}
 
 def send_tg_notification(text):
+    """Сповіщення в Телеграм"""
     if TG_TOKEN and TG_CHAT_ID:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         try:
@@ -34,29 +35,31 @@ def send_tg_notification(text):
         except: pass
 
 class BinotelAPI:
+    """Офіційна робота з Binotel API 2.0"""
     def __init__(self, key, secret):
         self.key = key
         self.secret = secret
         self.base_url = "https://api.binotel.com/api/2.0"
 
     def get_free_slots(self, date_str):
-        log(f"--- ЗАПИТ ДО API BINOTEL 2.0 (Дата: {date_str}) ---")
+        log(f"--- ЗАПИТ ДО API 2.0 (Дата: {date_str}) ---")
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
         
-        # Використовуємо 9970 як число, бо в URL браузера воно число
+        # Використовуємо рядок для branchId - це стандарт для API 2.0
         request_data = {
-            "branchId": 9970,
+            "branchId": "9970",
             "startDate": date_str
         }
         
-        # 1. Формуємо JSON без пробілів, сортуємо ключі
+        # 1. Формуємо JSON без пробілів, ключі за алфавітом
         json_data = json.dumps(request_data, separators=(',', ':'), sort_keys=True)
         
-        # 2. НОВИЙ ПІДПИС: Secret + JSON (Binotel часто хоче саме так)
-        signature = hashlib.md5((self.secret + json_data).encode('utf-8')).hexdigest()
+        # 2. ФОРМУЛА ПІДПИСУ: MD5(KEY + SECRET + JSON)
+        # Це найбільш розповсюджений стандарт для 2.0
+        signature = hashlib.md5((self.key + self.secret + json_data).encode('utf-8')).hexdigest()
         
-        log(f"Рядок для підпису (Secret першим): [SECRET_HIDDEN]{json_data}")
-        log(f"MD5: {signature}")
+        log(f"Рядок для підпису: {json_data}")
+        log(f"Підпис згенеровано: {signature[:10]}...")
 
         payload = {
             "key": self.key,
@@ -66,7 +69,7 @@ class BinotelAPI:
         
         try:
             response = requests.post(url, json=payload, timeout=12)
-            log(f"Binotel API Status: {response.status_code}")
+            log(f"Статус Binotel: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
@@ -74,28 +77,22 @@ class BinotelAPI:
                     log(f"API Error: {data.get('message')}")
                     return "Зараз уточню розклад у адміністратора!"
 
-                # Отримуємо імена майстрів
-                masters = {}
-                if "specialists" in data:
-                    masters = {m['id']: m.get('name', 'Майстер') for m in data['specialists']}
+                masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
                 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
                     slots = []
                     for s in data["freeTimes"]:
                         time = s['startTime'].split(' ')[1]
-                        master_name = masters.get(s.get('specialistId'), "Спеціаліст")
-                        slots.append(f"- {time} (Майстер: {master_name})")
-                    
-                    return f"На {date_str} є такі вікна:\n" + "\n".join(sorted(list(set(slots))))
-                
+                        name = masters.get(s.get('specialistId'), "Спеціаліст")
+                        slots.append(f"- {time} (Майстер: {name})")
+                    return f"На {date_str} є такі місця:\n" + "\n".join(sorted(list(set(slots))))
                 return f"На {date_str} вільних місць не знайдено."
             
-            log(f"API Error {response.status_code}: {response.text}")
-            return "Адміністратор зараз перевіряє графік."
-            
+            log(f"Помилка {response.status_code}: {response.text}")
+            return "Зараз адміністратор перевірить графік і напише вам!"
         except Exception as e:
             log(f"Критична помилка API: {e}")
-            return "Трохи зачекайте, оновлюю графік."
+            return "Зачекайте, оновлюю базу."
 
 crm = BinotelAPI(BINOTEL_KEY, BINOTEL_SECRET)
 
@@ -108,10 +105,12 @@ def process_message(sid, text):
     target = (today + timedelta(days=1)).strftime("%Y-%m-%d") if "завтр" in text.lower() else today.strftime("%Y-%m-%d")
 
     if sid not in user_sessions:
-        send_tg_notification(f"Новий клієнт!\n{text}")
-        log(f"Тягну дані на {target}...")
+        send_tg_notification(f"Клієнт в Instagram питає про розклад:\n{text}")
+        log(f"Запит CRM на {target}...")
         crm_data = crm.get_free_slots(target)
-        user_sessions[sid] = [{"role": "system", "content": f"Ти адмін салону Rozmary. Відповідай коротко. РОЗКЛАД:\n{crm_data}"}]
+        
+        system_content = f"Ти адмін салону Rozmary у Львові. Відповідай коротко. РОЗКЛАД: {crm_data}"
+        user_sessions[sid] = [{"role": "system", "content": system_content}]
     
     user_sessions[sid].append({"role": "user", "content": text})
     try:
