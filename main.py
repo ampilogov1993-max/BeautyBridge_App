@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Вимикаємо буферизацію логів, щоб бачити все миттєво
 def log(message):
     print(message, flush=True)
     sys.stdout.flush()
@@ -33,24 +32,36 @@ class BinotelSession:
         login_page_url = "https://my.binotel.ua/"
         headers = {
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'accept-language': 'uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7'
         }
         try:
-            log("--- СПРОБА ЛОГІНУ ---")
-            # 1. Отримуємо сторінку
+            log("--- ЗАПУСК РОЗУМНОГО ЛОГІНУ ---")
             response = self.session.get(login_page_url, headers=headers)
-            log(f"Сторінка логіну завантажена. Статус: {response.status_code}")
+            html = response.text
             
-            # 2. Шукаємо токен
-            token_search = re.search(r'name="_token" value="(.+?)"', response.text)
-            if not token_search:
-                log("ПОМИЛКА: CSRF токен не знайдено в HTML!")
+            # Шукаємо токен різними способами (regex став потужнішим)
+            patterns = [
+                r'name="_token"\s+value="(.+?)"',
+                r'value="(.+?)"\s+name="_token"',
+                r'name=\'_token\'\s+value=\'(.+?)\'',
+                r'content="(.+?)"\s+name="csrf-token"'
+            ]
+            
+            csrf_token = None
+            for pattern in patterns:
+                match = re.search(pattern, html)
+                if match:
+                    csrf_token = match.group(1)
+                    break
+            
+            if not csrf_token:
+                log("ПОМИЛКА: Токен не знайдено! Ось перші 500 символів сторінки:")
+                log(html[:500].replace('\n', ' ')) # Виводимо шматок коду для аналізу
                 return False
             
-            csrf_token = token_search.group(1)
-            log(f"Токен знайдено: {csrf_token[:10]}...")
+            log(f"Токен знайдено: {csrf_token[:15]}...")
 
-            # 3. Відправляємо пароль
             payload = {
                 '_token': csrf_token,
                 'email': BINOTEL_EMAIL,
@@ -58,26 +69,24 @@ class BinotelSession:
                 'remember': 'on'
             }
             
-            login_response = self.session.post(login_page_url, data=payload, headers=headers, allow_redirects=True)
-            log(f"Відповідь після логіну: {login_response.url}")
+            # Намагаємося зайти
+            login_res = self.session.post(login_page_url, data=payload, headers=headers, allow_redirects=True)
             
-            # Перевірка успіху
-            final_html = login_response.text.lower()
-            if "logout" in final_html or "bocrm" in final_html or "f/bookon" in final_html:
-                log("=== УСПІШНИЙ ВХІД В CRM! ===")
+            if "logout" in login_res.text.lower() or "bocrm" in login_res.text.lower():
+                log("=== УСПІШНО! БОТ УВІЙШОВ У CRM ===")
                 self.is_logged_in = True
                 return True
             
-            log("ЛОГІН НЕ ВДАВСЯ: Система знову викинула на сторінку входу.")
+            log("ЛОГІН НЕ ВДАВСЯ: Пароль вірний, але система не пустила.")
             return False
         except Exception as e:
-            log(f"Критична помилка авторизації: {e}")
+            log(f"Критична помилка: {e}")
             return False
 
     def get_slots(self, target_date=None):
         if not self.is_logged_in:
             if not self.login():
-                return "Доступ до бази тимчасово закритий адміністратором."
+                return "Зараз база на профілактиці, зачекайте."
 
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
@@ -90,42 +99,38 @@ class BinotelSession:
         }
 
         try:
-            log(f"Запит розкладу на {target_date}...")
-            response = self.session.get(url, headers=headers, timeout=10)
-            log(f"Статус CRM: {response.status_code}")
-
-            if response.status_code == 200:
-                data = response.json()
-                # Збираємо майстрів
+            log(f"Йду за даними на {target_date}...")
+            res = self.session.get(url, headers=headers, timeout=10)
+            
+            if res.status_code == 200:
+                data = res.json()
+                # Зшиваємо час і майстрів
                 masters = {}
-                for key in ["specialists", "employees", "staff", "users"]:
-                    if key in data and isinstance(data[key], list):
-                        for m in data[key]:
-                            masters[m.get("id")] = m.get("name", "Майстер")
+                for k in ["specialists", "employees", "staff", "users"]:
+                    if k in data and isinstance(data[k], list):
+                        for m in data[k]:
+                            masters[m.get("id")] = m.get("name", "Спеціаліст")
                         break
 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
-                    slots_info = []
-                    for slot in data["freeTimes"]:
-                        time = slot['startTime'].split(' ')[1]
-                        name = masters.get(slot.get('specialistId'), "Майстер")
-                        slots_info.append(f"- {time} (Майстер: {name})")
-                    
-                    available_times = "\n".join(sorted(list(set(slots_info))))
-                    return f"На дату {target_date} є такі вільні місця:\n{available_times}"
-                return f"На {target_date} вільних місць не знайдено."
-            
-            return "Зараз триває оновлення бази."
+                    slots = []
+                    for s in data["freeTimes"]:
+                        t = s['startTime'].split(' ')[1]
+                        n = masters.get(s.get('specialistId'), "Спеціаліст")
+                        slots.append(f"- {t} (Майстер: {n})")
+                    return f"Вільні місця на {target_date}:\n" + "\n".join(sorted(list(set(slots))))
+                return f"На {target_date} все зайнято."
+            return "База оновлюється."
         except Exception as e:
             log(f"Помилка CRM: {e}")
-            return "Технічна затримка."
+            return "Технічна пауза."
 
 crm_manager = BinotelSession()
 
 SYSTEM_PROMPT = """
-Ти — адміністратор салону "Rozmary". Відповідай коротко.
-Використовуй ТІЛЬКИ дані про вільні місця з системного повідомлення.
-Якщо даних немає, кажи, що зараз уточниш у адміністратора.
+Ти — адмін салону "Rozmary". Відповідай коротко і по суті.
+Використовуй ТІЛЬКИ дані з розкладу.
+Якщо розкладу немає (пише про профілактику), скажи: "Зараз перевірю розклад і відповім!"
 """
 
 def send_message(recipient_id, text):
@@ -139,23 +144,19 @@ def process_message(sender_id, user_text):
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
     if sender_id not in user_sessions:
-        log(f"Новий діалог з {sender_id}. Йду за розкладом...")
+        log("Новий юзер. Запит у CRM...")
         crm_data = crm_manager.get_slots(target_date)
-        full_prompt = f"{SYSTEM_PROMPT}\n\nАКТУАЛЬНИЙ РОЗКЛАД ({target_date}):\n{crm_data}"
-        user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
+        full_p = f"{SYSTEM_PROMPT}\n\nРОЗКЛАД ({target_date}):\n{crm_data}"
+        user_sessions[sender_id] = [{"role": "system", "content": full_p}]
     
     user_sessions[sender_id].append({"role": "user", "content": user_text})
     
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=user_sessions[sender_id],
-            temperature=0.3
-        )
-        ai_reply = response.choices[0].message.content
-        user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
-        send_message(sender_id, ai_reply)
-        log(f"Відповідь відправлена клієнту.")
+        res = client.chat.completions.create(model="gpt-4o", messages=user_sessions[sender_id], temperature=0.3)
+        reply = res.choices[0].message.content
+        user_sessions[sender_id].append({"role": "assistant", "content": reply})
+        send_message(sender_id, reply)
+        log("Відповідь відправлена.")
     except Exception as e:
         log(f"OpenAI Error: {e}")
 
@@ -165,7 +166,6 @@ def webhook():
         if request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
         return "Forbidden", 403
-
     if request.method == "POST":
         data = request.json
         if data.get("object") == "instagram":
