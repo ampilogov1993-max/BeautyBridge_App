@@ -34,13 +34,14 @@ SYSTEM_PROMPT = """
 """
 
 def get_crm_slots():
-    """Функція для запиту в Binotel Bookon (Парсинг майстрів)"""
+    """Функція для запиту в Binotel Bookon (з найсвіжішими куками)"""
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId=9970&startDate={today}"
     
+    # ТВОЇ НОВІ КУКИ ТА ХЕДЕРИ
     headers = {
         'accept': 'application/json, text/plain, */*',
-        'cookie': 'bocrm_production_session=eyJpdiI6IkNoZGdwa1B2ZlpudEV1a2NGSVpTNUE9PSIsInZhbHVlIjoiSVNUZndCUVAvRzFEclZCRDkwY0x4WlVmL0hXRnE5cm1qZGY3K3B2bkRBNjNrb3BXRGhPVGNSRlJpUVlzSmpZa1ZaNEdHa1ZiR2QraDhwZjNrZHBtbExPMVEyTTRjOHZCM05KMVZTN2ZDWG4rM29pUGN1U2NMb1VEaU5URlZSRVQiLCJtYWMiOiI5ZDI4ZjFiMjVmYjJkZTI2NWIwMTg3NDI4MTllOGRjYTZiYmZmMGFhZGM0Y2QwMDViNjM1ZTZjMDQ4YTQ4YjVkIiwidGFnIjoiIn0%3D; pbx_production_session=eyJpdiI6ImtrS3JRVlBXRnBMU25QclE2cDh6dVE9PSIsInZhbHVlIjoiTmlTTGdPckczeEhlMU5ZdG5RRDh1Q0J4Nk1SZjVjcjQ3SElMYzJJbTBYVlRIcmt6K2dTcDlqdTB4QTlGL00rbVU0SW9aTnE3Zm9LSXByRzlBZWpvTUtZci9NaGpoQnhTYmU3dmw3WXpTaWpMcW81dlQ3QUNzY0tMZmxZai9zdlEiLCJtYWMiOiIwNTg2ZGRjYzQ4NWM5YzEwZGVkNjhiMzdhODRmNTM5MDVjMzg4NDA5MmVhMjM0YzI1YWVkYzUzMTA1YThlMmJkIiwidGFnIjoiIn0%3D;',
+        'cookie': 'remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6IlcyVEFBQzRpVXl3TlVJTmlZZE5rbGc9PSIsInZhbHVlIjoiMXpBckRvbVRKODNIRXJQWGVYWjJ6NnhFdkkrTFBlZVFtT3NCQkNWZy9Pd0c5Y0lydjkvRGlRZ282SHRwYnVxWWtrMURob0JSUXpFOVlGZWpiQ0hPcWc9PSIsIm1hYyI6IjQyMmY1MjAwOTU5Mzc1OTBjMjZhYzU2YmQ1OGExYTFiMzJkMGFjNTg3NDZmODA1MjQ5YzI0NzI5MjQwZjg1YmMiLCJ0YWciOiIifQ%3D%3D; XSRF-TOKEN=eyJpdiI6IkY3WGplaEtaQ0lQeWNNbVJSOGZhbUE9PSIsInZhbHVlIjoiWGE5R1c2OE1lZFgyUnNWRlp3RUIrc0EzcGx0VS9CUHRCZ2trenQvdXI1MVhQODh2MW1OL2Zkdk1JNGVENlU3TnF6dXJFN2pldHUxMVcyU2c1SjlLSEV5eFFzQnIwa3llYUFIOUZMQ2RRTDlkMUVhdnZJc3hpNXIzTE9TMGFuNEkiLCJtYWMiOiI3M2E1NmI1NDQ0OTFjYzE4YmMwNjNjMGU2YjMzODg1ZTM2NzM2NGVmZWVkYjA3ZWU3ODRlZWNiMGMyOWRkMzIzIiwidGFnIjoiIn0%3D; bocrm_production_session=eyJpdiI6Ikw5VGpDcW9kRzVnTXFkYzAyK0gyMnc9PSIsInZhbHVlIjoiT67FcVVDcUV5b0tnZUhlaGgxU2lLZUdvYnlsN1ZmbDE5SWdKL3VvRGV0cnlET1VRVUJ3MkZaZVVjY2lNako1eFJUbVhlazN5UlJuZGxvUnVIL3A4Vzk3MDFzcVVKSHlRck96b2xvZ0xObGVMZ3RKcGZyK21Gd0dWNlZsUGJIa1giLCJtYWMiOiI1OTYxODBiZWZlYmUwN2MyOGM1N2M2NzUwNDhhMDFiZjk3NzhhM2NhYjBjYTY0Mzk5MzVkYzViZjgyNzYyMWNlIiwidGFnIjoiIn0%3D; _fbp=fb.1.1775386406793.63895127954870116; _ga=GA1.1.447468764.1775386470; PHPSESSID=mljg9ajmjtgbqofjidama1fr6i; _gfhdez=sR2xJBdT',
         'referer': 'https://my.binotel.ua/f/bookon/',
         'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
         'x-requested-with': 'XMLHttpRequest'
@@ -48,76 +49,49 @@ def get_crm_slots():
     
     try:
         response = requests.get(url, headers=headers, timeout=5)
-        print("=== ВІДПОВІДЬ ВІД BINOTEL ===")
-        print(f"Статус: {response.status_code}")
+        print(f"=== ВІДПОВІДЬ ВІД BINOTEL. СТАТУС: {response.status_code} ===")
         
         if response.status_code == 200:
-            try:
-                data = response.json()
-            except ValueError:
-                return "База оновлюється. Запропонуй ранок (10:00 або 11:00)."
-
-            # 1. ШУКАЄМО ІМЕНА МАЙСТРІВ
+            data = response.json()
+            # Збираємо майстрів
             masters = {}
-            for key in ["specialists", "employees", "staff", "users", "workers", "resources"]:
+            for key in ["specialists", "employees", "staff", "users"]:
                 if key in data and isinstance(data[key], list):
-                    for item in data[key]:
-                        m_id = item.get("id")
-                        m_name = item.get("name", item.get("firstName", "Спеціаліст"))
-                        if m_id:
-                            masters[m_id] = m_name
+                    for m in data[key]:
+                        masters[m.get("id")] = m.get("name", "Спеціаліст")
                     break
-            
-            # 2. ЗВ'ЯЗУЄМО ЧАС З МАЙСТРАМИ
+
             if "freeTimes" in data and len(data["freeTimes"]) > 0:
-                slots_by_time = {}
+                slots_info = []
                 for slot in data["freeTimes"]:
-                    time_only = slot['startTime'].split(' ')[1]
-                    spec_id = slot.get('specialistId')
-                    
-                    master_name = masters.get(spec_id, "Майстер")
-                    
-                    if time_only not in slots_by_time:
-                        slots_by_time[time_only] = []
-                    if master_name not in slots_by_time[time_only]:
-                        slots_by_time[time_only].append(master_name)
+                    time = slot['startTime'].split(' ')[1]
+                    name = masters.get(slot.get('specialistId'), "Майстер")
+                    slots_info.append(f"- {time} (Майстер: {name})")
                 
-                # 3. ФОРМУЄМО ТЕКСТ ДЛЯ AI
-                result_lines = []
-                for t in sorted(slots_by_time.keys()):
-                    masters_str = ", ".join(slots_by_time[t])
-                    result_lines.append(f"- {t} (Майстри: {masters_str})")
-                
-                available_times = "\n".join(result_lines)
+                available_times = "\n".join(sorted(list(set(slots_info))))
                 print(f"Знайдено слоти: \n{available_times}")
-                return f"Сьогодні ({today}) є такі вільні години та майстри:\n{available_times}"
+                return f"На сьогодні ({today}) вільні: \n{available_times}"
             else:
-                return f"На сьогодні ({today}) вільних вікон уже немає."
-        else:
-            return "Немає доступу до бази. Запропонуй 10:00 або 11:00."
-            
+                return "На сьогодні вільних місць немає."
+        return "Доступ до бази тимчасово обмежений."
     except Exception as e:
         print(f"Помилка CRM: {e}")
         return "Не вдалося отримати графік."
 
 def send_message(recipient_id, text):
-    """Відправка повідомлення в Instagram"""
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {"text": text}
-    }
+    payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
     requests.post(url, json=payload)
 
 def process_message(sender_id, user_text):
-    """Фонова обробка повідомлення"""
     if sender_id not in user_sessions:
         crm_data = get_crm_slots()
-        full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
+        full_prompt = f"{SYSTEM_PROMPT}\n\nАКТУАЛЬНИЙ РОЗКЛАД:\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
     
     user_sessions[sender_id].append({"role": "user", "content": user_text})
     
+    # Пам'ять на 10 повідомлень
     if len(user_sessions[sender_id]) > 11:
         user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
 
@@ -125,40 +99,28 @@ def process_message(sender_id, user_text):
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=user_sessions[sender_id],
-            temperature=0.4 
+            temperature=0.4
         )
         ai_reply = response.choices[0].message.content
-        
         user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
         send_message(sender_id, ai_reply)
-        print(f"AI відповідь відправлена: {ai_reply}")
-        
     except Exception as e:
-        print(f"Помилка OpenAI: {e}")
+        print(f"OpenAI Error: {e}")
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
     if request.method == "GET":
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
+        if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+            return request.args.get("hub.challenge"), 200
         return "Forbidden", 403
 
     if request.method == "POST":
         data = request.json
-        
         if data.get("object") == "instagram":
             for entry in data.get("entry", []):
-                for messaging_event in entry.get("messaging", []):
-                    if "message" in messaging_event and "text" in messaging_event["message"]:
-                        sender_id = messaging_event["sender"]["id"]
-                        user_text = messaging_event["message"]["text"]
-                        
-                        thread = threading.Thread(target=process_message, args=(sender_id, user_text))
-                        thread.start()
-                        
+                for event in entry.get("messaging", []):
+                    if "message" in event and "text" in event["message"]:
+                        threading.Thread(target=process_message, args=(event["sender"]["id"], event["message"]["text"])).start()
         return "EVENT_RECEIVED", 200
 
 if __name__ == "__main__":
