@@ -63,11 +63,10 @@ def get_crm_slots():
                 if key in data and isinstance(data[key], list):
                     for item in data[key]:
                         m_id = item.get("id")
-                        # Шукаємо ім'я, якщо немає - називаємо просто "Спеціаліст"
                         m_name = item.get("name", item.get("firstName", "Спеціаліст"))
                         if m_id:
                             masters[m_id] = m_name
-                    break # Знайшли масив майстрів
+                    break
             
             # 2. ЗВ'ЯЗУЄМО ЧАС З МАЙСТРАМИ
             if "freeTimes" in data and len(data["freeTimes"]) > 0:
@@ -76,7 +75,7 @@ def get_crm_slots():
                     time_only = slot['startTime'].split(' ')[1]
                     spec_id = slot.get('specialistId')
                     
-                    master_name = masters.get(spec_id, "Майстер (ім'я уточнюється)")
+                    master_name = masters.get(spec_id, "Майстер")
                     
                     if time_only not in slots_by_time:
                         slots_by_time[time_only] = []
@@ -90,7 +89,7 @@ def get_crm_slots():
                     result_lines.append(f"- {t} (Майстри: {masters_str})")
                 
                 available_times = "\n".join(result_lines)
-                print(f"Знайдено слоти: \n{available_times}") # Виведемо в логи для перевірки
+                print(f"Знайдено слоти: \n{available_times}")
                 return f"Сьогодні ({today}) є такі вільні години та майстри:\n{available_times}"
             else:
                 return f"На сьогодні ({today}) вільних вікон уже немає."
@@ -121,3 +120,46 @@ def process_message(sender_id, user_text):
     
     if len(user_sessions[sender_id]) > 11:
         user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=user_sessions[sender_id],
+            temperature=0.4 
+        )
+        ai_reply = response.choices[0].message.content
+        
+        user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
+        send_message(sender_id, ai_reply)
+        print(f"AI відповідь відправлена: {ai_reply}")
+        
+    except Exception as e:
+        print(f"Помилка OpenAI: {e}")
+
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        mode = request.args.get("hub.mode")
+        token = request.args.get("hub.verify_token")
+        challenge = request.args.get("hub.challenge")
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            return challenge, 200
+        return "Forbidden", 403
+
+    if request.method == "POST":
+        data = request.json
+        
+        if data.get("object") == "instagram":
+            for entry in data.get("entry", []):
+                for messaging_event in entry.get("messaging", []):
+                    if "message" in messaging_event and "text" in messaging_event["message"]:
+                        sender_id = messaging_event["sender"]["id"]
+                        user_text = messaging_event["message"]["text"]
+                        
+                        thread = threading.Thread(target=process_message, args=(sender_id, user_text))
+                        thread.start()
+                        
+        return "EVENT_RECEIVED", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
