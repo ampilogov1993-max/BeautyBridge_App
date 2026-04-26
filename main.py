@@ -2,13 +2,19 @@ import os
 import requests
 import threading
 import re
+import sys
 from flask import Flask, request
 from openai import OpenAI
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# --- КЛЮЧІ З RAILWAY ---
+# Вимикаємо буферизацію логів, щоб бачити все миттєво
+def log(message):
+    print(message, flush=True)
+    sys.stdout.flush()
+
+# --- КЛЮЧІ ---
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -24,26 +30,27 @@ class BinotelSession:
         self.is_logged_in = False
 
     def login(self):
-        """Парсимо CSRF-токен та заходимо в CRM"""
         login_page_url = "https://my.binotel.ua/"
         headers = {
-            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36'
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
         }
         try:
-            # 1. Отримуємо сторінку логіну
+            log("--- СПРОБА ЛОГІНУ ---")
+            # 1. Отримуємо сторінку
             response = self.session.get(login_page_url, headers=headers)
-            html = response.text
+            log(f"Сторінка логіну завантажена. Статус: {response.status_code}")
             
-            # 2. Шукаємо прихований _token через Regular Expression
-            token_search = re.search(r'name="_token" value="(.+?)"', html)
+            # 2. Шукаємо токен
+            token_search = re.search(r'name="_token" value="(.+?)"', response.text)
             if not token_search:
-                print("Помилка: Не вдалося знайти CSRF токен на сторінці!")
+                log("ПОМИЛКА: CSRF токен не знайдено в HTML!")
                 return False
             
             csrf_token = token_search.group(1)
-            print(f"Знайдено секретний токен: {csrf_token[:10]}...")
+            log(f"Токен знайдено: {csrf_token[:10]}...")
 
-            # 3. Робимо реальний POST для входу
+            # 3. Відправляємо пароль
             payload = {
                 '_token': csrf_token,
                 'email': BINOTEL_EMAIL,
@@ -52,21 +59,22 @@ class BinotelSession:
             }
             
             login_response = self.session.post(login_page_url, data=payload, headers=headers, allow_redirects=True)
+            log(f"Відповідь після логіну: {login_response.url}")
             
-            # Перевіряємо успіх (шукаємо слово logout або b/bocrm)
-            if login_response.status_code == 200 and ("logout" in login_response.text.lower() or "bocrm" in login_response.text.lower()):
-                print("=== УСПІШНИЙ АВТОЛОГІН У BINOTEL ===")
+            # Перевірка успіху
+            final_html = login_response.text.lower()
+            if "logout" in final_html or "bocrm" in final_html or "f/bookon" in final_html:
+                log("=== УСПІШНИЙ ВХІД В CRM! ===")
                 self.is_logged_in = True
                 return True
             
-            print(f"Помилка входу. Перевір BINOTEL_EMAIL та BINOTEL_PASSWORD!")
+            log("ЛОГІН НЕ ВДАВСЯ: Система знову викинула на сторінку входу.")
             return False
         except Exception as e:
-            print(f"Критична помилка авторизації: {e}")
+            log(f"Критична помилка авторизації: {e}")
             return False
 
     def get_slots(self, target_date=None):
-        """Запит розкладу з автологіном"""
         if not self.is_logged_in:
             if not self.login():
                 return "Доступ до бази тимчасово закритий адміністратором."
@@ -82,21 +90,18 @@ class BinotelSession:
         }
 
         try:
+            log(f"Запит розкладу на {target_date}...")
             response = self.session.get(url, headers=headers, timeout=10)
-            
-            # Якщо сесія злетіла (401), пробуємо один раз перелогінитись
-            if response.status_code == 401:
-                self.login()
-                response = self.session.get(url, headers=headers, timeout=10)
+            log(f"Статус CRM: {response.status_code}")
 
             if response.status_code == 200:
                 data = response.json()
+                # Збираємо майстрів
                 masters = {}
-                # Шукаємо список майстрів у JSON
-                for key in ["specialists", "employees", "staff", "users", "resources"]:
+                for key in ["specialists", "employees", "staff", "users"]:
                     if key in data and isinstance(data[key], list):
                         for m in data[key]:
-                            masters[m.get("id")] = m.get("name", "Спеціаліст")
+                            masters[m.get("id")] = m.get("name", "Майстер")
                         break
 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
@@ -110,21 +115,17 @@ class BinotelSession:
                     return f"На дату {target_date} є такі вільні місця:\n{available_times}"
                 return f"На {target_date} вільних місць не знайдено."
             
-            return "Зараз триває оновлення бази, спробуйте пізніше."
+            return "Зараз триває оновлення бази."
         except Exception as e:
-            print(f"Помилка CRM: {e}")
-            return "Технічна затримка в базі."
+            log(f"Помилка CRM: {e}")
+            return "Технічна затримка."
 
 crm_manager = BinotelSession()
 
 SYSTEM_PROMPT = """
-Ти — помічник адміністратора салону краси "Rozmary" у Львові. 
-Твоя мета: консультувати клієнтів щодо вільного часу.
-1. Пропонуй ТІЛЬКИ ті години та тих майстрів, які бачиш у системних даних нижче.
-2. Якщо клієнт питає про "завтра", використовуй дані на завтрашню дату.
-3. НІКОЛИ не вигадуй майстрів, яких немає в списку.
-4. ПРІОРИТЕТ: Спочатку пропонуй ранок (10:00-12:00).
-5. Наприкінці кажи: "Передаю заявку адміністратору, він зараз підтвердить ваш запис!"
+Ти — адміністратор салону "Rozmary". Відповідай коротко.
+Використовуй ТІЛЬКИ дані про вільні місця з системного повідомлення.
+Якщо даних немає, кажи, що зараз уточниш у адміністратора.
 """
 
 def send_message(recipient_id, text):
@@ -132,25 +133,19 @@ def send_message(recipient_id, text):
     requests.post(url, json={"recipient": {"id": recipient_id}, "message": {"text": text}})
 
 def process_message(sender_id, user_text):
-    # Визначаємо дату для запиту в CRM
     today_dt = datetime.now()
     target_date = today_dt.strftime("%Y-%m-%d")
-    
     if "завтр" in user_text.lower():
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Якщо новий діалог — підтягуємо свіжий розклад
     if sender_id not in user_sessions:
+        log(f"Новий діалог з {sender_id}. Йду за розкладом...")
         crm_data = crm_manager.get_slots(target_date)
         full_prompt = f"{SYSTEM_PROMPT}\n\nАКТУАЛЬНИЙ РОЗКЛАД ({target_date}):\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
     
     user_sessions[sender_id].append({"role": "user", "content": user_text})
     
-    # Тримаємо пам'ять діалогу
-    if len(user_sessions[sender_id]) > 11:
-        user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
-
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -160,8 +155,9 @@ def process_message(sender_id, user_text):
         ai_reply = response.choices[0].message.content
         user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
         send_message(sender_id, ai_reply)
+        log(f"Відповідь відправлена клієнту.")
     except Exception as e:
-        print(f"OpenAI Error: {e}")
+        log(f"OpenAI Error: {e}")
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
