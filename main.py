@@ -1,4 +1,5 @@
 import os
+import httpx
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 import uvicorn
@@ -7,19 +8,19 @@ from openai import OpenAI
 app = FastAPI()
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
+# Токен для связи с Meta (должен совпадать с тем, что в кабинете FB)
+VERIFY_TOKEN = "rozmary2026" 
+# Тот самый "вечный" токен страницы из Railway
+FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
+
 SYSTEM_PROMPT = """
 Ти — адміністратор інстаграм-директу салону краси "Rozmary" у Львові.
-Твоє завдання: людяно консультувати клієнтів та допомагати їм записатися 
-на послуги.
-
-ПРАВИЛА СПІЛКУВАННЯ:
-1. Пиши коротко, без зайвого офіціозу. Використовуй емодзі, але помірно 
-(1-2 на повідомлення).
-2. Мова: за замовчуванням українська. Якщо пишуть англійською - відповідай 
-англійською.
-3. ПРІОРИТЕТ: Завжди намагайся закрити ранок (10:00 - 12:00).
-
-ВІЛЬНІ СЛОТИ: уточни в адміністратора
+Твоє завдання: людяно консультувати клієнтів та допомагати їм записатися.
+ПРАВИЛА:
+1. Пиши коротко, емодзі (1-2).
+2. Мова: українська (або англійська, якщо клієнт пише нею).
+3. ПРІОРИТЕТ: закрити ранок (10:00 - 12:00).
+ВІЛЬНІ СЛОТИ: уточнюйте у адміністратора.
 """
 
 @app.get("/")
@@ -32,15 +33,14 @@ async def verify_webhook(
     hub_verify_token: str = Query(alias="hub.verify_token"),
     hub_challenge: str = Query(alias="hub.challenge")
 ):
-    if hub_verify_token == "rozmary2026":
+    if hub_verify_token == VERIFY_TOKEN:
         return PlainTextResponse(hub_challenge)
     return PlainTextResponse("Forbidden", status_code=403)
 
 @app.post("/webhook")
 async def handle_messages(request: Request):
     data = await request.json()
-    print(f"Отримано дані від Meta: {data}")
-
+    
     try:
         entry = data.get("entry", [])
         for e in entry:
@@ -48,11 +48,14 @@ async def handle_messages(request: Request):
             for m in messaging:
                 sender_id = m.get("sender", {}).get("id")
                 message = m.get("message", {})
+                
+                # КРИТИЧНО: Захист від того, щоб бот не відповідав сам собі
+                if message.get("is_echo"):
+                    continue
+
                 text = message.get("text", "")
-
                 if text and sender_id:
-                    print(f"Повідомлення від {sender_id}: {text}")
-
+                    # 1. Генеруємо відповідь через OpenAI
                     response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=[
@@ -61,7 +64,17 @@ async def handle_messages(request: Request):
                         ]
                     )
                     ai_reply = response.choices[0].message.content
-                    print(f"AI відповідь: {ai_reply}")
+
+                    # 2. ВІДПРАВЛЯЄМО ВІДПОВІДЬ В INSTAGRAM (Це те, чого не було!)
+                    async with httpx.AsyncClient() as ac:
+                        await ac.post(
+                            f"https://graph.facebook.com/v25.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}",
+                            json={
+                                "recipient": {"id": sender_id},
+                                "message": {"text": ai_reply}
+                            }
+                        )
+                    print(f"Відповідь надіслана клієнту {sender_id}")
 
     except Exception as e:
         print(f"Помилка: {e}")
