@@ -27,7 +27,6 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 user_sessions = {}
 
 def send_tg_notification(text):
-    """Сповіщення в Телеграм"""
     if TG_TOKEN and TG_CHAT_ID:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         try:
@@ -35,7 +34,6 @@ def send_tg_notification(text):
         except: pass
 
 class BinotelAPI:
-    """Офіційна робота з Binotel API 2.0"""
     def __init__(self, key, secret):
         self.key = key
         self.secret = secret
@@ -45,21 +43,22 @@ class BinotelAPI:
         log(f"--- ЗАПИТ ДО API 2.0 (Дата: {date_str}) ---")
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
         
-        # Використовуємо рядок для branchId - це стандарт для API 2.0
+        # Використовуємо 9970 як ЧИСЛО (integer)
         request_data = {
-            "branchId": "9970",
+            "branchId": 9970,
             "startDate": date_str
         }
         
         # 1. Формуємо JSON без пробілів, ключі за алфавітом
         json_data = json.dumps(request_data, separators=(',', ':'), sort_keys=True)
         
-        # 2. ФОРМУЛА ПІДПИСУ: MD5(KEY + SECRET + JSON)
-        # Це найбільш розповсюджений стандарт для 2.0
-        signature = hashlib.md5((self.key + self.secret + json_data).encode('utf-8')).hexdigest()
+        # 2. ФОРМУЛА ПІДПИСУ: MD5(SECRET + KEY + JSON)
+        # Це стандарт для багатьох модулів Binotel 2.0
+        signature_raw = self.secret + self.key + json_data
+        signature = hashlib.md5(signature_raw.encode('utf-8')).hexdigest()
         
         log(f"Рядок для підпису: {json_data}")
-        log(f"Підпис згенеровано: {signature[:10]}...")
+        log(f"Підпис (S+K+J): {signature[:10]}...")
 
         payload = {
             "key": self.key,
@@ -77,22 +76,22 @@ class BinotelAPI:
                     log(f"API Error: {data.get('message')}")
                     return "Зараз уточню розклад у адміністратора!"
 
-                masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
+                masters = {m['id']: m.get('name', 'Спеціаліст') for m in data.get('specialists', [])}
                 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
                     slots = []
                     for s in data["freeTimes"]:
                         time = s['startTime'].split(' ')[1]
-                        name = masters.get(s.get('specialistId'), "Спеціаліст")
-                        slots.append(f"- {time} (Майстер: {name})")
-                    return f"На {date_str} є такі місця:\n" + "\n".join(sorted(list(set(slots))))
+                        name = masters.get(s.get('specialistId'), "Майстер")
+                        slots.append(f"- {time} ({name})")
+                    return f"На {date_str} є такі вікна:\n" + "\n".join(sorted(list(set(slots))))
                 return f"На {date_str} вільних місць не знайдено."
             
-            log(f"Помилка {response.status_code}: {response.text}")
-            return "Зараз адміністратор перевірить графік і напише вам!"
+            log(f"API Error {response.status_code}: {response.text}")
+            return "Зараз адміністратор перевірить графік!"
         except Exception as e:
-            log(f"Критична помилка API: {e}")
-            return "Зачекайте, оновлюю базу."
+            log(f"Помилка API: {e}")
+            return "Оновлюю базу, зачекайте хвилину."
 
 crm = BinotelAPI(BINOTEL_KEY, BINOTEL_SECRET)
 
@@ -105,11 +104,11 @@ def process_message(sid, text):
     target = (today + timedelta(days=1)).strftime("%Y-%m-%d") if "завтр" in text.lower() else today.strftime("%Y-%m-%d")
 
     if sid not in user_sessions:
-        send_tg_notification(f"Клієнт в Instagram питає про розклад:\n{text}")
-        log(f"Запит CRM на {target}...")
+        send_tg_notification(f"Новий клієнт в Instagram!\nТекст: {text}")
+        log(f"Тягну дані CRM...")
         crm_data = crm.get_free_slots(target)
         
-        system_content = f"Ти адмін салону Rozmary у Львові. Відповідай коротко. РОЗКЛАД: {crm_data}"
+        system_content = f"Ти адміністратор Rozmary у Львові. Відповідай коротко. РОЗКЛАД: {crm_data}"
         user_sessions[sid] = [{"role": "system", "content": system_content}]
     
     user_sessions[sid].append({"role": "user", "content": text})
