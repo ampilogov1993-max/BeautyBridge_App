@@ -14,7 +14,7 @@ def log(msg):
     print(msg, flush=True)
     sys.stdout.flush()
 
-# --- ПЕРЕМІННІ З RAILWAY (з чисткою пробілів) ---
+# --- ПЕРЕМІННІ З RAILWAY (чистимо від пробілів) ---
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "").strip()
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -27,33 +27,36 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 user_sessions = {}
 
 def send_tg_notification(text):
+    """Надсилає сповіщення в твій Telegram"""
     if TG_TOKEN and TG_CHAT_ID:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         try:
-            requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge:\n{text}"})
-        except: pass
+            requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge Notification:\n{text}"})
+        except Exception as e:
+            log(f"TG Error: {e}")
 
 class BinotelAPI:
+    """Робота з офіційним API Binotel 2.0 (Bookon)"""
     def __init__(self, key, secret):
         self.key = key
         self.secret = secret
         self.base_url = "https://api.binotel.com/api/2.0"
 
     def get_free_slots(self, date_str):
-        log(f"--- ЗАПИТ З ПІДПИСОМ (Дата: {date_str}) ---")
+        log(f"--- ЗАПИТ ДО API BINOTEL 2.0 (Дата: {date_str}) ---")
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
         
-        # Використовуємо 9970 як число, як у вдалому ручному запиті
+        # КРИТИЧНО: branchId як рядок "9970" для правильного MD5
         request_data = {
-            "branchId": 9970,
+            "branchId": "9970",
             "startDate": date_str
         }
         
-        # КРИТИЧНО: JSON має бути без пробілів і з відсортованими ключами
+        # 1. Формуємо JSON без пробілів і з відсортованими ключами
         json_data = json.dumps(request_data, separators=(',', ':'), sort_keys=True)
         log(f"Рядок для підпису: {json_data}")
         
-        # Створюємо підпис MD5(json_data + secret)
+        # 2. Створюємо підпис: MD5(json_data + secret)
         signature = hashlib.md5((json_data + self.secret).encode('utf-8')).hexdigest()
         
         payload = {
@@ -63,72 +66,90 @@ class BinotelAPI:
         }
         
         try:
-            response = requests.post(url, json=payload, timeout=12)
+            response = requests.post(url, json=payload, timeout=15)
             log(f"Binotel API Status: {response.status_code}")
             
             if response.status_code == 200:
                 data = response.json()
                 if data.get('status') == 'error':
-                    log(f"API Error Message: {data.get('message')}")
+                    log(f"Binotel Business Error: {data.get('message')}")
                     return "Зараз адміністратор уточнює розклад, зачекайте хвилинку!"
 
-                # Збираємо майстрів
-                masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
+                # Збираємо імена майстрів
+                masters = {m['id']: m.get('name', 'Спеціаліст') for m in data.get('specialists', [])}
                 
                 if "freeTimes" in data and len(data["freeTimes"]) > 0:
-                    slots = []
+                    slots_info = []
                     for s in data["freeTimes"]:
                         time = s['startTime'].split(' ')[1]
-                        name = masters.get(s.get('specialistId'), "Спеціаліст")
-                        slots.append(f"- {time} (Майстер: {name})")
+                        master_name = masters.get(s.get('specialistId'), "Майстер")
+                        slots_info.append(f"- {time} (Майстер: {master_name})")
                     
-                    return f"На {date_str} є такі вікна:\n" + "\n".join(sorted(list(set(slots))))
-                return f"На {date_str} вільних місць немає."
+                    # Прибираємо дублі та сортуємо
+                    available_times = "\n".join(sorted(list(set(slots_info))))
+                    return f"На {date_str} є такі вільні віконця:\n{available_times}"
+                
+                return f"На {date_str} вільних місць не знайдено."
             
-            log(f"Помилка API {response.status_code}: {response.text}")
-            return "Зараз адміністратор перевірить розклад і напише вам!"
+            log(f"API Error Response: {response.text}")
+            return "Зараз адміністратор перевірить графік і напише вам!"
+            
         except Exception as e:
-            log(f"Критична помилка: {e}")
-            return "Зараз уточнюємо графік у майстрів."
+            log(f"Критична помилка API: {e}")
+            return "Оновлюю базу даних, зачекайте хвилину."
 
+# Ініціалізація CRM
 crm = BinotelAPI(BINOTEL_KEY, BINOTEL_SECRET)
 
-def send_instagram_msg(rid, text):
+SYSTEM_PROMPT = """
+Ти — привітна адміністраторка салону краси "Rozmary" у Львові. 
+Твоя мета: консультувати клієнтів щодо вільного часу.
+1. Використовуй ТІЛЬКИ ті дані про вільний час, які надані в системі.
+2. Пропонуй спочатку ранок (10:00-12:00).
+3. Якщо клієнт питає про "завтра", дивись дані на завтрашню дату.
+4. Наприкінці обов'язково кажи: "Я передала вашу заявку адміністратору, вона зараз зв'яжеться з вами для підтвердження!"
+"""
+
+def send_instagram_msg(recipient_id, text):
+    """Надсилає повідомлення в Instagram Direct"""
     url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
-    requests.post(url, json={"recipient": {"id": rid}, "message": {"text": text}})
+    requests.post(url, json={"recipient": {"id": recipient_id}, "message": {"text": text}})
 
-def process_message(sid, text):
-    today = datetime.now()
-    # Визначаємо дату (сьогодні чи завтра)
-    target = (today + timedelta(days=1)).strftime("%Y-%m-%d") if "завтр" in text.lower() else today.strftime("%Y-%m-%d")
-
-    if sid not in user_sessions:
-        send_tg_notification(f"Клієнт в Instagram питає:\n\"{text}\"")
-        log(f"Тягну дані з CRM на {target}...")
-        crm_data = crm.get_free_slots(target)
-        
-        # Посилений системний промпт, щоб бот не фантазував
-        system_content = (
-            f"Ти привітна адміністраторка Rozmary. "
-            f"Ось дані про вільний час майстрів: {crm_data}. "
-            f"Якщо дані містять час, пропонуй його. Якщо там пише 'уточню розклад', так і кажи клієнту."
-        )
-        user_sessions[sid] = [{"role": "system", "content": system_content}]
+def process_message(sender_id, user_text):
+    """Обробка вхідного повідомлення"""
+    today_dt = datetime.now()
+    target_date = today_dt.strftime("%Y-%m-%d")
     
-    user_sessions[sid].append({"role": "user", "content": text})
+    if "завтр" in user_text.lower():
+        target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Якщо новий діалог — сповіщаємо в ТГ і тягнемо розклад
+    if sender_id not in user_sessions:
+        send_tg_notification(f"Новий клієнт в Instagram!\nПитання: {user_text}")
+        
+        log(f"Запит розкладу на {target_date}...")
+        crm_data = crm.get_free_slots(target_date)
+        
+        user_sessions[sender_id] = [
+            {"role": "system", "content": f"{SYSTEM_PROMPT}\n\nРОЗКЛАД З БАЗИ:\n{crm_data}"}
+        ]
+    
+    user_sessions[sender_id].append({"role": "user", "content": user_text})
     
     try:
-        res = client.chat.completions.create(
-            model="gpt-4o", 
-            messages=user_sessions[sid], 
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=user_sessions[sender_id],
             temperature=0.3
         )
-        reply = res.choices[0].message.content
-        user_sessions[sid].append({"role": "assistant", "content": reply})
-        send_instagram_msg(sid, reply)
-        log("Відповідь надіслана.")
+        ai_reply = response.choices[0].message.content
+        user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
+        
+        send_instagram_msg(sender_id, ai_reply)
+        log("Відповідь надіслана клієнту.")
+        
     except Exception as e:
-        log(f"AI Error: {e}")
+        log(f"OpenAI Error: {e}")
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
@@ -136,6 +157,7 @@ def webhook():
         if request.args.get("hub.verify_token") == VERIFY_TOKEN:
             return request.args.get("hub.challenge"), 200
         return "Forbidden", 403
+    
     if request.method == "POST":
         data = request.json
         if data.get("object") == "instagram":
