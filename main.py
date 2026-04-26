@@ -1,5 +1,6 @@
 import os
 import requests
+import threading
 from flask import Flask, request
 from openai import OpenAI
 from datetime import datetime
@@ -13,8 +14,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ПАМ'ЯТЬ ДИАЛОГІВ ---
-# Тут зберігається історія листування для кожного клієнта
+# --- ПАМ'ЯТЬ ДІАЛОГІВ ---
 user_sessions = {}
 
 SYSTEM_PROMPT = """
@@ -36,7 +36,6 @@ def get_crm_slots():
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId=9970&startDate={today}"
     
-    # Використовуємо твої кукі з браузера, які ми витягли через F12
     headers = {
         'accept': 'application/json, text/plain, */*',
         'cookie': 'bocrm_production_session=eyJpdiI6IkNoZGdwa1B2ZlpudEV1a2NGSVpTNUE9PSIsInZhbHVlIjoiSVNUZndCUVAvRzFEclZCRDkwY0x4WlVmL0hXRnE5cm1qZGY3K3B2bkRBNjNrb3BXRGhPVGNSRlJpUVlzSmpZa1ZaNEdHa1ZiR2QraDhwZjNrZHBtbExPMVEyTTRjOHZCM05KMVZTN2ZDWG4rM29pUGN1U2NMb1VEaU5URlZSRVQiLCJtYWMiOiI5ZDI4ZjFiMjVmYjJkZTI2NWIwMTg3NDI4MTllOGRjYTZiYmZmMGFhZGM0Y2QwMDViNjM1ZTZjMDQ4YTQ4YjVkIiwidGFnIjoiIn0%3D; pbx_production_session=eyJpdiI6ImtrS3JRVlBXRnBMU25QclE2cDh6dVE9PSIsInZhbHVlIjoiTmlTTGdPckczeEhlMU5ZdG5RRDh1Q0J4Nk1SZjVjcjQ3SElMYzJJbTBYVlRIcmt6K2dTcDlqdTB4QTlGL00rbVU0SW9aTnE3Zm9LSXByRzlBZWpvTUtZci9NaGpoQnhTYmU3dmw3WXpTaWpMcW81dlQ3QUNzY0tMZmxZai9zdlEiLCJtYWMiOiIwNTg2ZGRjYzQ4NWM5YzEwZGVkNjhiMzdhODRmNTM5MDVjMzg4NDA5MmVhMjM0YzI1YWVkYzUzMTA1YThlMmJkIiwidGFnIjoiIn0%3D;',
@@ -46,29 +45,31 @@ def get_crm_slots():
     }
     
     try:
-        response = requests.get(url, headers=headers)
+        # Додано таймаут 5 секунд, щоб запит не висів вічно
+        response = requests.get(url, headers=headers, timeout=5)
         print("=== ВІДПОВІДЬ ВІД BINOTEL ===")
         print(f"Статус: {response.status_code}")
         
-        # Якщо CRM пустила нас (код 200)
         if response.status_code == 200:
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                print("Помилка: Binotel повернув HTML замість JSON. Можливо, кукі застаріли.")
+                return "База оновлюється. Запропонуй ранок (10:00 або 11:00)."
+
             if "freeTimes" in data and len(data["freeTimes"]) > 0:
                 slots = []
                 for slot in data["freeTimes"]:
-                    # Беремо тільки години (наприклад, 10:00) з startTime
                     time_only = slot['startTime'].split(' ')[1] 
                     slots.append(time_only)
                 
-                # Прибираємо дублікати і сортуємо
                 unique_slots = sorted(list(set(slots)))
                 available_times = ", ".join(unique_slots)
-                
                 return f"Сьогодні ({today}) є такі вільні години: {available_times}."
             else:
                 return f"На сьогодні ({today}) вільних вікон уже немає."
         else:
-            return "Немає доступу до бази. Запропонуй 10:00 або 11:00, а потім скажи, що перевіриш розклад."
+            return "Немає доступу до бази. Запропонуй 10:00 або 11:00."
             
     except Exception as e:
         print(f"Помилка CRM: {e}")
@@ -82,6 +83,36 @@ def send_message(recipient_id, text):
         "message": {"text": text}
     }
     requests.post(url, json=payload)
+
+def process_message(sender_id, user_text):
+    """Фонова обробка повідомлення (CRM + OpenAI)"""
+    # 1. ІНІЦІАЛІЗАЦІЯ ПАМ'ЯТІ ТА ЗАПИТ У CRM
+    if sender_id not in user_sessions:
+        crm_data = get_crm_slots()
+        full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
+        user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
+    
+    # 2. ДОДАЄМО ПОВІДОМЛЕННЯ КЛІЄНТА В ІСТОРІЮ
+    user_sessions[sender_id].append({"role": "user", "content": user_text})
+    
+    if len(user_sessions[sender_id]) > 11:
+        user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
+
+    # 3. ЗАПИТ ДО OPENAI
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=user_sessions[sender_id],
+            temperature=0.7
+        )
+        ai_reply = response.choices[0].message.content
+        
+        user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
+        send_message(sender_id, ai_reply)
+        print(f"AI відповідь відправлена: {ai_reply}")
+        
+    except Exception as e:
+        print(f"Помилка OpenAI: {e}")
 
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
@@ -104,8 +135,12 @@ def webhook():
                         sender_id = messaging_event["sender"]["id"]
                         user_text = messaging_event["message"]["text"]
                         
-                        # 1. ІНІЦІАЛІЗАЦІЯ ПАМ'ЯТІ ТА ЗАПИТ У CRM
-                        if sender_id not in user_sessions:
-                            # Отримуємо свіжі слоти з CRM ТІЛЬКИ на початку нового діалогу
-                            crm_data = get_crm_slots()
-                            full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
+                        # ЗАПУСКАЄМО В ФОНОВОМУ ПОТОЦІ
+                        # Це дозволяє миттєво повернути "EVENT_RECEIVED" для Meta
+                        thread = threading.Thread(target=process_message, args=(sender_id, user_text))
+                        thread.start()
+                        
+        return "EVENT_RECEIVED", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
