@@ -13,7 +13,7 @@ def log(message):
     print(message, flush=True)
     sys.stdout.flush()
 
-# --- КЛЮЧІ ---
+# --- КЛЮЧІ З RAILWAY ---
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -29,63 +29,56 @@ class BinotelSession:
         self.is_logged_in = False
 
     def login(self):
+        """Логін через специфічні поля logining[email] та logining[password]"""
         login_url = "https://my.binotel.ua/"
         headers = {
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://my.binotel.ua',
+            'referer': 'https://my.binotel.ua/'
         }
         try:
-            log("--- ВХІД У BINOTEL (СПРОБА #2) ---")
-            # 1. Отримуємо сторінку логіну
+            log("--- СПРОБА ВХОДУ (НОВІ ПОЛЯ) ---")
+            # 1. Спочатку робимо GET, щоб ініціалізувати сесію
             res = self.session.get(login_url, headers=headers, timeout=10)
-            html = res.text
             
-            # 2. Шукаємо токен (більш гнучкий regex)
-            # Шукаємо <input type="hidden" name="_token" value="...">
-            token_match = re.search(r'name=["\']_token["\']\s+value=["\'](.+?)["\']', html)
-            if not token_match:
-                # Спробуємо навпаки: value="..." name="_token"
-                token_match = re.search(r'value=["\'](.+?)["\']\s+name=["\']_token["\']', html)
-            
-            if not token_match:
-                log("ПОМИЛКА: _token не знайдено! Шукаю альтернативи...")
-                # Якщо не знайшли _token, подивимось, які взагалі приховані поля є
-                hidden_fields = re.findall(r'name=["\'](.+?)["\']', html)
-                log(f"Знайдені поля на сторінці: {hidden_fields[:10]}")
-                return False
-            
-            csrf_token = token_match.group(1)
-            log(f"КЛЮЧ ЗНАЙДЕНО! (починається на {csrf_token[:6]})")
+            # Спробуємо все ж знайти токен, раптом він з'явився
+            csrf_token = None
+            token_match = re.search(r'name=["\']_token["\']\s+value=["\'](.+?)["\']', res.text)
+            if token_match:
+                csrf_token = token_match.group(1)
+                log(f"Токен знайдено: {csrf_token[:6]}...")
 
-            # 3. Сама авторизація
+            # 2. Формуємо дані (використовуємо logining[...])
             payload = {
-                '_token': csrf_token,
-                'email': BINOTEL_EMAIL,
-                'password': BINOTEL_PASSWORD,
-                'remember': 'on'
+                'logining[email]': BINOTEL_EMAIL,
+                'logining[password]': BINOTEL_PASSWORD,
+                'logining[submit]': 'Увійти'
             }
+            if csrf_token:
+                payload['_token'] = csrf_token
+
+            # 3. Відправляємо логін
+            auth_res = self.session.post(login_url, data=payload, headers=headers, allow_redirects=True)
             
-            # Важливо: використовуємо той самий referer
-            login_headers = headers.copy()
-            login_headers['referer'] = login_url
-            
-            auth_res = self.session.post(login_url, data=payload, headers=login_headers, allow_redirects=True)
-            
-            if "logout" in auth_res.text.lower() or "bocrm" in auth_res.text.lower():
-                log("=== ПЕРЕМОГА! БОТ УВІЙШОВ У СИСТЕМУ ===")
+            # Перевіряємо, чи ми всередині
+            final_content = auth_res.text.lower()
+            if "logout" in final_content or "bocrm" in final_content or "f/bookon" in final_content:
+                log("=== УСПІХ! БОТ УВІЙШОВ У BINOTEL ===")
                 self.is_logged_in = True
                 return True
             
-            log("ЛОГІН ВІДХИЛЕНО: Можливо, невірні BINOTEL_EMAIL/PASSWORD?")
+            log("ВХІД НЕ ВДАВСЯ: Перевір BINOTEL_EMAIL та BINOTEL_PASSWORD!")
             return False
         except Exception as e:
-            log(f"Помилка входу: {e}")
+            log(f"Помилка авторизації: {e}")
             return False
 
     def get_slots(self, target_date=None):
         if not self.is_logged_in:
             if not self.login():
-                return "Зараз база на профілактиці. Залиште ваш номер, і я перетелефоную!"
+                return "Зараз уточнюю графік у майстрів, хвилиночку!"
 
         if not target_date:
             target_date = datetime.now().strftime("%Y-%m-%d")
@@ -104,7 +97,6 @@ class BinotelSession:
             if res.status_code == 200:
                 data = res.json()
                 masters = {}
-                # Шукаємо масив майстрів
                 for k in ["specialists", "employees", "staff", "users"]:
                     if k in data and isinstance(data[k], list):
                         for m in data[k]:
@@ -117,27 +109,25 @@ class BinotelSession:
                         t = s['startTime'].split(' ')[1]
                         n = masters.get(s.get('specialistId'), "Майстер")
                         slots.append(f"- {t} (Майстер: {n})")
-                    
-                    return f"На {target_date} є такі вікна:\n" + "\n".join(sorted(list(set(slots))))
+                    return f"Вільні місця на {target_date}:\n" + "\n".join(sorted(list(set(slots))))
                 return f"На жаль, на {target_date} все зайнято."
             
             if res.status_code == 401:
-                log("Сесія злетіла, роблю перелогін...")
+                log("Сесія застаріла, перепідключаюсь...")
                 self.is_logged_in = False
                 return self.get_slots(target_date)
 
-            return "Не вдалося отримати дані з CRM."
+            return "Не вдалося завантажити графік."
         except Exception as e:
             log(f"Помилка CRM: {e}")
-            return "Технічна пауза в базі."
+            return "Зараз перевірю розклад і відповім!"
 
-# Один менеджер на весь додаток
 crm_manager = BinotelSession()
 
 SYSTEM_PROMPT = """
 Ти — адміністратор салону "Rozmary". Відповідай коротко.
-Якщо у даних є вільні місця — пропонуй їх (час + ім'я майстра).
-Якщо даних немає або там помилка, скажи: "Зараз якраз уточнюю графік у майстрів, хвилиночку!"
+Якщо у даних є вільні місця — пропонуй їх (час + майстер).
+Якщо даних немає, скажи: "Зараз якраз уточнюю графік у майстрів, хвилиночку!"
 """
 
 def send_message(recipient_id, text):
@@ -148,13 +138,11 @@ def process_message(sender_id, user_text):
     today_dt = datetime.now()
     target_date = today_dt.strftime("%Y-%m-%d")
     
-    # Реакція на слово "завтра"
     if "завтр" in user_text.lower():
         target_date = (today_dt + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Якщо новий діалог - йдемо в CRM
     if sender_id not in user_sessions:
-        log(f"Новий клієнт {sender_id}. Тягну дані з Binotel...")
+        log(f"Запит від {sender_id}. Йду за розкладом...")
         crm_data = crm_manager.get_slots(target_date)
         full_p = f"{SYSTEM_PROMPT}\n\nРОЗКЛАД ({target_date}):\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_p}]
@@ -166,7 +154,7 @@ def process_message(sender_id, user_text):
         reply = res.choices[0].message.content
         user_sessions[sender_id].append({"role": "assistant", "content": reply})
         send_message(sender_id, reply)
-        log("Відповідь успішно відправлена.")
+        log("Відповідь відправлена.")
     except Exception as e:
         log(f"OpenAI Error: {e}")
 
