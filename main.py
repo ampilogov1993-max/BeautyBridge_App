@@ -19,21 +19,22 @@ user_sessions = {}
 
 SYSTEM_PROMPT = """
 Ти — помічник адміністратора інстаграм-директу салону краси "Rozmary" у Львові. 
-Твоя мета: привітно консультувати клієнтів і допомагати їм обрати вільний час.
+Твоя мета: привітно консультувати клієнтів і допомагати їм обрати вільний час та майстра.
 
 ЖОРСТКІ ПРАВИЛА (КРИТИЧНО ВАЖЛИВО):
-1. НІКОЛИ не вигадуй імена майстрів (ніяких Ольг, Марій тощо). Кажи просто "наш майстер" або "спеціаліст".
-2. НІКОЛИ не кажи клієнту "Я вас записала" або "Запис підтверджено". У тебе немає прав створювати запис у CRM. 
-3. ФІНАЛ ДІАЛОГУ: Коли клієнт обрав послугу і час, ти МАЄШ сказати: "Супер! Передаю заявку адміністратору. Він зараз перевірить розклад і напише вам для остаточного підтвердження запису ⏳".
-4. Не вітайся в кожному повідомленні. 
-5. ПРІОРИТЕТ: Завжди спочатку пропонуй ранкові зміни (10:00-12:00), які є в списку вільних.
+1. ТИ БАЧИШ РЕАЛЬНІ ІМЕНА МАЙСТРІВ У СИСТЕМНИХ ДАНИХ. Пропонуй час і називай ім'я майстра, яке вказано поруч із часом.
+2. НІКОЛИ не вигадуй імена майстрів, яких немає в списку на сьогодні.
+3. НІКОЛИ не кажи клієнту "Я вас записала" або "Запис підтверджено". У тебе немає прав створювати запис у CRM. 
+4. ФІНАЛ ДІАЛОГУ: Коли клієнт обрав послугу, час і майстра, ти МАЄШ сказати: "Супер! Передаю заявку адміністратору. Вона зараз перевірить розклад і напише вам для остаточного підтвердження запису ⏳".
+5. Не вітайся в кожному повідомленні. 
+6. ПРІОРИТЕТ: Завжди спочатку пропонуй ранкові зміни (10:00-12:00), які є в списку вільних.
 
 ІНФОРМАЦІЯ ПРО ЗАПИС:
-Нижче ти отримаєш список реальних вільних місць. Пропонуй ТІЛЬКИ ті години, які є у списку.
+Нижче ти отримаєш список реальних вільних місць та імена майстрів. Пропонуй ТІЛЬКИ ті години та тих майстрів, які є у списку.
 """
 
 def get_crm_slots():
-    """Функція для запиту в Binotel Bookon (з імітацією браузера)"""
+    """Функція для запиту в Binotel Bookon (Парсинг майстрів)"""
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId=9970&startDate={today}"
     
@@ -46,7 +47,6 @@ def get_crm_slots():
     }
     
     try:
-        # Додано таймаут 5 секунд, щоб запит не висів вічно
         response = requests.get(url, headers=headers, timeout=5)
         print("=== ВІДПОВІДЬ ВІД BINOTEL ===")
         print(f"Статус: {response.status_code}")
@@ -55,18 +55,43 @@ def get_crm_slots():
             try:
                 data = response.json()
             except ValueError:
-                print("Помилка: Binotel повернув HTML замість JSON. Можливо, кукі застаріли.")
                 return "База оновлюється. Запропонуй ранок (10:00 або 11:00)."
 
+            # 1. ШУКАЄМО ІМЕНА МАЙСТРІВ
+            masters = {}
+            for key in ["specialists", "employees", "staff", "users", "workers", "resources"]:
+                if key in data and isinstance(data[key], list):
+                    for item in data[key]:
+                        m_id = item.get("id")
+                        # Шукаємо ім'я, якщо немає - називаємо просто "Спеціаліст"
+                        m_name = item.get("name", item.get("firstName", "Спеціаліст"))
+                        if m_id:
+                            masters[m_id] = m_name
+                    break # Знайшли масив майстрів
+            
+            # 2. ЗВ'ЯЗУЄМО ЧАС З МАЙСТРАМИ
             if "freeTimes" in data and len(data["freeTimes"]) > 0:
-                slots = []
+                slots_by_time = {}
                 for slot in data["freeTimes"]:
-                    time_only = slot['startTime'].split(' ')[1] 
-                    slots.append(time_only)
+                    time_only = slot['startTime'].split(' ')[1]
+                    spec_id = slot.get('specialistId')
+                    
+                    master_name = masters.get(spec_id, "Майстер (ім'я уточнюється)")
+                    
+                    if time_only not in slots_by_time:
+                        slots_by_time[time_only] = []
+                    if master_name not in slots_by_time[time_only]:
+                        slots_by_time[time_only].append(master_name)
                 
-                unique_slots = sorted(list(set(slots)))
-                available_times = ", ".join(unique_slots)
-                return f"Сьогодні ({today}) є такі вільні години: {available_times}."
+                # 3. ФОРМУЄМО ТЕКСТ ДЛЯ AI
+                result_lines = []
+                for t in sorted(slots_by_time.keys()):
+                    masters_str = ", ".join(slots_by_time[t])
+                    result_lines.append(f"- {t} (Майстри: {masters_str})")
+                
+                available_times = "\n".join(result_lines)
+                print(f"Знайдено слоти: \n{available_times}") # Виведемо в логи для перевірки
+                return f"Сьогодні ({today}) є такі вільні години та майстри:\n{available_times}"
             else:
                 return f"На сьогодні ({today}) вільних вікон уже немає."
         else:
@@ -86,62 +111,13 @@ def send_message(recipient_id, text):
     requests.post(url, json=payload)
 
 def process_message(sender_id, user_text):
-    """Фонова обробка повідомлення (CRM + OpenAI)"""
-    # 1. ІНІЦІАЛІЗАЦІЯ ПАМ'ЯТІ ТА ЗАПИТ У CRM
+    """Фонова обробка повідомлення"""
     if sender_id not in user_sessions:
         crm_data = get_crm_slots()
         full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
         user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
     
-    # 2. ДОДАЄМО ПОВІДОМЛЕННЯ КЛІЄНТА В ІСТОРІЮ
     user_sessions[sender_id].append({"role": "user", "content": user_text})
     
     if len(user_sessions[sender_id]) > 11:
-        user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
-
-    # 3. ЗАПИТ ДО OPENAI
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=user_sessions[sender_id],
-            temperature=0.7
-        )
-        ai_reply = response.choices[0].message.content
-        
-        user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
-        send_message(sender_id, ai_reply)
-        print(f"AI відповідь відправлена: {ai_reply}")
-        
-    except Exception as e:
-        print(f"Помилка OpenAI: {e}")
-
-@app.route("/webhook", methods=["GET", "POST"])
-def webhook():
-    if request.method == "GET":
-        mode = request.args.get("hub.mode")
-        token = request.args.get("hub.verify_token")
-        challenge = request.args.get("hub.challenge")
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            return challenge, 200
-        return "Forbidden", 403
-
-    if request.method == "POST":
-        data = request.json
-        print("Отримано дані від Meta!")
-        
-        if data.get("object") == "instagram":
-            for entry in data.get("entry", []):
-                for messaging_event in entry.get("messaging", []):
-                    if "message" in messaging_event and "text" in messaging_event["message"]:
-                        sender_id = messaging_event["sender"]["id"]
-                        user_text = messaging_event["message"]["text"]
-                        
-                        # ЗАПУСКАЄМО В ФОНОВОМУ ПОТОЦІ
-                        # Це дозволяє миттєво повернути "EVENT_RECEIVED" для Meta
-                        thread = threading.Thread(target=process_message, args=(sender_id, user_text))
-                        thread.start()
-                        
-        return "EVENT_RECEIVED", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+        user_sessions[sender_id] = [user_sessions[sender_id
