@@ -10,12 +10,10 @@ app = Flask(__name__)
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = "rozmary2026"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-BOOKON_API_KEY = os.environ.get("BOOKON_API_KEY")
-BOOKON_API_SECRET = os.environ.get("BOOKON_API_SECRET")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- ПАМ'ЯТЬ ДІАЛОГІВ ---
+# --- ПАМ'ЯТЬ ДИАЛОГІВ ---
 # Тут зберігається історія листування для кожного клієнта
 user_sessions = {}
 
@@ -34,22 +32,43 @@ SYSTEM_PROMPT = """
 """
 
 def get_crm_slots():
-    """Тестова функція для запиту в Binotel Bookon"""
+    """Функція для запиту в Binotel Bookon (з імітацією браузера)"""
     today = datetime.now().strftime("%Y-%m-%d")
     url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId=9970&startDate={today}"
     
+    # Використовуємо твої кукі з браузера, які ми витягли через F12
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'cookie': 'bocrm_production_session=eyJpdiI6IkNoZGdwa1B2ZlpudEV1a2NGSVpTNUE9PSIsInZhbHVlIjoiSVNUZndCUVAvRzFEclZCRDkwY0x4WlVmL0hXRnE5cm1qZGY3K3B2bkRBNjNrb3BXRGhPVGNSRlJpUVlzSmpZa1ZaNEdHa1ZiR2QraDhwZjNrZHBtbExPMVEyTTRjOHZCM05KMVZTN2ZDWG4rM29pUGN1U2NMb1VEaU5URlZSRVQiLCJtYWMiOiI5ZDI4ZjFiMjVmYjJkZTI2NWIwMTg3NDI4MTllOGRjYTZiYmZmMGFhZGM0Y2QwMDViNjM1ZTZjMDQ4YTQ4YjVkIiwidGFnIjoiIn0%3D; pbx_production_session=eyJpdiI6ImtrS3JRVlBXRnBMU25QclE2cDh6dVE9PSIsInZhbHVlIjoiTmlTTGdPckczeEhlMU5ZdG5RRDh1Q0J4Nk1SZjVjcjQ3SElMYzJJbTBYVlRIcmt6K2dTcDlqdTB4QTlGL00rbVU0SW9aTnE3Zm9LSXByRzlBZWpvTUtZci9NaGpoQnhTYmU3dmw3WXpTaWpMcW81dlQ3QUNzY0tMZmxZai9zdlEiLCJtYWMiOiIwNTg2ZGRjYzQ4NWM5YzEwZGVkNjhiMzdhODRmNTM5MDVjMzg4NDA5MmVhMjM0YzI1YWVkYzUzMTA1YThlMmJkIiwidGFnIjoiIn0%3D;',
+        'referer': 'https://my.binotel.ua/f/bookon/',
+        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        'x-requested-with': 'XMLHttpRequest'
+    }
+    
     try:
-        # Пробуємо відправити GET запит
-        response = requests.get(url)
+        response = requests.get(url, headers=headers)
         print("=== ВІДПОВІДЬ ВІД BINOTEL ===")
         print(f"Статус: {response.status_code}")
-        # Виводимо перші 200 символів відповіді в логи Railway
-        print(response.text[:200]) 
         
-        if response.status_code == 200 and "freeTimes" in response.text:
-            return f"Сьогодні ({today}) є такі вільні години: [Система ще налаштовується, запропонуй 10:00 або 11:00]"
+        # Якщо CRM пустила нас (код 200)
+        if response.status_code == 200:
+            data = response.json()
+            if "freeTimes" in data and len(data["freeTimes"]) > 0:
+                slots = []
+                for slot in data["freeTimes"]:
+                    # Беремо тільки години (наприклад, 10:00) з startTime
+                    time_only = slot['startTime'].split(' ')[1] 
+                    slots.append(time_only)
+                
+                # Прибираємо дублікати і сортуємо
+                unique_slots = sorted(list(set(slots)))
+                available_times = ", ".join(unique_slots)
+                
+                return f"Сьогодні ({today}) є такі вільні години: {available_times}."
+            else:
+                return f"На сьогодні ({today}) вільних вікон уже немає."
         else:
-            return f"Розклад на {today} тимчасово прихований. Запропонуй ранковий час (10:00-12:00), а потім скажи, що перевіриш у базі."
+            return "Немає доступу до бази. Запропонуй 10:00 або 11:00, а потім скажи, що перевіриш розклад."
             
     except Exception as e:
         print(f"Помилка CRM: {e}")
@@ -85,40 +104,8 @@ def webhook():
                         sender_id = messaging_event["sender"]["id"]
                         user_text = messaging_event["message"]["text"]
                         
-                        # 1. ІНІЦІАЛІЗАЦІЯ ПАМ'ЯТІ
+                        # 1. ІНІЦІАЛІЗАЦІЯ ПАМ'ЯТІ ТА ЗАПИТ У CRM
                         if sender_id not in user_sessions:
-                            # Якщо клієнт пише вперше, додаємо системний промпт і дані з CRM
+                            # Отримуємо свіжі слоти з CRM ТІЛЬКИ на початку нового діалогу
                             crm_data = get_crm_slots()
-                            full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬНИЙ ЧАС:\n{crm_data}"
-                            user_sessions[sender_id] = [{"role": "system", "content": full_prompt}]
-                        
-                        # 2. ДОДАЄМО ПОВІДОМЛЕННЯ КЛІЄНТА В ІСТОРІЮ
-                        user_sessions[sender_id].append({"role": "user", "content": user_text})
-                        
-                        # Обрізаємо історію, щоб не переповнювати пам'ять OpenAI (залишаємо промпт + останні 10 повідомлень)
-                        if len(user_sessions[sender_id]) > 11:
-                            user_sessions[sender_id] = [user_sessions[sender_id][0]] + user_sessions[sender_id][-10:]
-
-                        # 3. ЗАПИТ ДО OPENAI З УСІЄЮ ІСТОРІЄЮ
-                        try:
-                            response = client.chat.completions.create(
-                                model="gpt-4o",
-                                messages=user_sessions[sender_id],
-                                temperature=0.7
-                            )
-                            ai_reply = response.choices[0].message.content
-                            
-                            # Зберігаємо відповідь бота в історію
-                            user_sessions[sender_id].append({"role": "assistant", "content": ai_reply})
-                            
-                            # 4. ВІДПРАВКА В ІНСТАГРАМ
-                            send_message(sender_id, ai_reply)
-                            print(f"AI відповідь відправлена: {ai_reply}")
-                            
-                        except Exception as e:
-                            print(f"Помилка OpenAI: {e}")
-                            
-        return "EVENT_RECEIVED", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+                            full_prompt = f"{SYSTEM_PROMPT}\n\nСИСТЕМНІ ДАНІ ПРО ВІЛЬ
