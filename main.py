@@ -65,7 +65,7 @@ def send_tg_notification(text):
             requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge:\n{text}"}, timeout=10)
         except Exception as exc: pass
 
-# --- ТВІЙ ІДЕАЛЬНИЙ API КЛАС З ДЕБАГОМ ---
+# --- ФІНАЛЬНИЙ API КЛАС З ІДЕАЛЬНИМ ПІДПИСОМ ---
 class BinotelAPI:
     def __init__(self, key, secret, branch_id):
         self.key = key or ""
@@ -77,7 +77,7 @@ class BinotelAPI:
         # JSON суворо без пробілів
         json_data = json.dumps(data, separators=(',', ':'))
         
-        # ОБОВ'ЯЗКОВО ТАК: Формуємо рядок через f-string
+        # ПРАВИЛЬНА ФОРМУЛА: KEY + JSON + SECRET
         raw = f"{self.key}{json_data}{self.secret}"
         
         signature = hashlib.md5(raw.encode('utf-8')).hexdigest()
@@ -86,7 +86,7 @@ class BinotelAPI:
     def get_free_slots(self, date_str):
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
 
-        # Сувора типізація
+        # Сувора типізація: branchId як int, startDate як str
         request_data = {
             "branchId": int(self.branch_id),
             "startDate": str(date_str)
@@ -102,7 +102,6 @@ class BinotelAPI:
 
         try:
             log(f"--- API REQUEST TO BINOTEL ({date_str}) ---")
-            # ВИВОДИМО КЛЮЧІ ДЛЯ ПЕРЕВІРКИ (в лапках, щоб бачити пустоту)
             log(f"API KEY: '{self.key}'")
             log(f"API SECRET: '{self.secret}'")
             log(f"Signature base string: {raw_string}")
