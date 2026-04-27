@@ -25,6 +25,7 @@ VERIFY_TOKEN = env("VERIFY_TOKEN", "rozmary2026")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
 OPENAI_MODEL = env("OPENAI_MODEL", "gpt-4o")
 
+# ОФІЦІЙНІ API КЛЮЧІ
 BINOTEL_API_KEY = env("BINOTEL_API_KEY")
 BINOTEL_API_SECRET = env("BINOTEL_API_SECRET")
 
@@ -64,24 +65,28 @@ def send_tg_notification(text):
             requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge:\n{text}"}, timeout=10)
         except Exception as exc: pass
 
-# --- API КЛАС BINOTEL ---
+# --- ТВІЙ ІДЕАЛЬНИЙ API КЛАС З ДЕБАГОМ ---
 class BinotelAPI:
     def __init__(self, key, secret, branch_id):
-        self.key = key
-        self.secret = secret
+        self.key = key or ""
+        self.secret = secret or ""
         self.branch_id = branch_id
         self.base_url = "https://api.binotel.com/api/2.0"
 
     def generate_signature(self, data):
+        # JSON суворо без пробілів
         json_data = json.dumps(data, separators=(',', ':'))
-        raw = self.key + json_data + self.secret
+        
+        # ОБОВ'ЯЗКОВО ТАК: Формуємо рядок через f-string
+        raw = f"{self.key}{json_data}{self.secret}"
+        
         signature = hashlib.md5(raw.encode('utf-8')).hexdigest()
         return signature, raw, json_data
 
     def get_free_slots(self, date_str):
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
 
-        # СУВОРА ТИПІЗАЦІЯ
+        # Сувора типізація
         request_data = {
             "branchId": int(self.branch_id),
             "startDate": str(date_str)
@@ -97,14 +102,15 @@ class BinotelAPI:
 
         try:
             log(f"--- API REQUEST TO BINOTEL ({date_str}) ---")
-            log(f"RequestData: {json_string}")
+            # ВИВОДИМО КЛЮЧІ ДЛЯ ПЕРЕВІРКИ (в лапках, щоб бачити пустоту)
+            log(f"API KEY: '{self.key}'")
+            log(f"API SECRET: '{self.secret}'")
             log(f"Signature base string: {raw_string}")
-            log(f"Signature MD5: {signature}")
             
             res = requests.post(
                 url, 
                 json=payload, 
-                headers={"Content-Type": "application/json"}, # ДОДАНО ЗАГОЛОВОК
+                headers={"Content-Type": "application/json"},
                 timeout=10
             )
             
