@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -24,9 +25,8 @@ VERIFY_TOKEN = env("VERIFY_TOKEN", "rozmary2026")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
 OPENAI_MODEL = env("OPENAI_MODEL", "gpt-4o")
 
-# НОВІ ЗМІННІ ДЛЯ СЕСІЙНОЇ АВТОРИЗАЦІЇ
-BINOTEL_EMAIL = env("BINOTEL_EMAIL")
-BINOTEL_PASSWORD = env("BINOTEL_PASSWORD")
+BINOTEL_API_KEY = env("BINOTEL_API_KEY")
+BINOTEL_API_SECRET = env("BINOTEL_API_SECRET")
 
 TG_TOKEN = env("TELEGRAM_BOT_TOKEN")
 TG_CHAT_ID = env("TELEGRAM_CHAT_ID")
@@ -62,56 +62,75 @@ def send_tg_notification(text):
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         try: 
             requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🔔 BeautyBridge:\n{text}"}, timeout=10)
-        except Exception as exc: 
-            log(f"Telegram error: {exc}")
+        except Exception as exc: pass
 
-# --- НОВИЙ КЛАС BINOTEL API (ЧЕРЕЗ СЕСІЮ) ---
+# --- API КЛАС BINOTEL ---
 class BinotelAPI:
-    def __init__(self, email, password, branch_id):
-        self.email = email
-        self.password = password
+    def __init__(self, key, secret, branch_id):
+        self.key = key
+        self.secret = secret
         self.branch_id = branch_id
-        self.session = requests.Session()
-        self.logged_in = False
+        self.base_url = "https://api.binotel.com/api/2.0"
 
-    def login(self):
-        try:
-            log(f"Спроба авторизації в BoCRM ({self.email})...")
-            res = self.session.post(
-                "https://my.binotel.ua/login",
-                data={"email": self.email, "password": self.password},
-                timeout=10,
-                allow_redirects=True
-            )
-            self.logged_in = res.status_code == 200
-            log(f"BoCRM login status: {res.status_code}")
-        except Exception as e:
-            log(f"Login error: {e}")
+    def generate_signature(self, data):
+        json_data = json.dumps(data, separators=(',', ':'))
+        raw = self.key + json_data + self.secret
+        signature = hashlib.md5(raw.encode('utf-8')).hexdigest()
+        return signature, raw, json_data
 
     def get_free_slots(self, date_str):
-        if not self.logged_in:
-            self.login()
-            
+        url = f"{self.base_url}/bookon/get-free-times-for-day.json"
+
+        # СУВОРА ТИПІЗАЦІЯ
+        request_data = {
+            "branchId": int(self.branch_id),
+            "startDate": str(date_str)
+        }
+
+        signature, raw_string, json_string = self.generate_signature(request_data)
+
+        payload = {
+            "key": self.key,
+            "signature": signature,
+            "requestData": request_data
+        }
+
         try:
-            url = f"https://my.binotel.ua/b/bocrm/calendar/day?branchId={self.branch_id}&startDate={date_str}"
-            log(f"Тягну слоти: {url}")
-            res = self.session.get(url, timeout=10)
-            log(f"BoCRM slots status: {res.status_code}")
+            log(f"--- API REQUEST TO BINOTEL ({date_str}) ---")
+            log(f"RequestData: {json_string}")
+            log(f"Signature base string: {raw_string}")
+            log(f"Signature MD5: {signature}")
             
+            res = requests.post(
+                url, 
+                json=payload, 
+                headers={"Content-Type": "application/json"}, # ДОДАНО ЗАГОЛОВОК
+                timeout=10
+            )
+            
+            log(f"Binotel status: {res.status_code}")
+            log(f"Response: {res.text}")
+
             if res.status_code == 200:
                 data = res.json()
-                # Поки що повертаємо сирі дані рядком, щоб побачити структуру в логах/відповіді AI
-                return str(data)
+                if data.get('status') == 'error':
+                    return "NO_DATA"
                 
-            self.logged_in = False
-            return "NO_DATA"
+                masters = {m['id']: m.get('name', 'Майстер') for m in data.get('specialists', [])}
+                if "freeTimes" in data and len(data["freeTimes"]) > 0:
+                    slots = [f"- {s['startTime'].split(' ')[1]} ({masters.get(s.get('specialistId'), 'Спеціаліст')})" for s in data["freeTimes"]]
+                    return "\n".join(sorted(list(set(slots))))
+                return "ALL_BUSY"
+            
+            return "ERROR"
+
         except Exception as e:
-            log(f"Slots error: {e}")
-            return "NO_DATA"
+            log(f"Binotel error: {e}")
+            return "ERROR"
 
 crm = BinotelAPI(
-    email=BINOTEL_EMAIL,
-    password=BINOTEL_PASSWORD,
+    key=BINOTEL_API_KEY,
+    secret=BINOTEL_API_SECRET,
     branch_id=BINOTEL_BRANCH_ID
 )
 
@@ -121,13 +140,14 @@ def resolve_target_date(text):
     return (t + timedelta(days=1)).strftime("%Y-%m-%d") if "завтр" in text.lower() else t.strftime("%Y-%m-%d")
 
 def build_system_prompt(target_date, crm_data):
-    if crm_data == "NO_DATA":
-        instr = "Дані оновлюються. Скажи, що адмін напише за хвилину. НЕ ВИГАДУЙ ЧАС."
+    if crm_data == "ALL_BUSY":
+        instr = f"На {target_date} вільних місць немає. Попроси клієнта обрати іншу дату."
+    elif crm_data in ["ERROR", "NO_DATA"]:
+        instr = "Дані зараз оновлюються. Скажи, що адмін напише особисто. НЕ ВИГАДУЙ ЧАС."
     else:
-        # AI отримає сирий JSON і спробує сам з нього витягнути вільний час
-        instr = f"Ось сирі дані розкладу на {target_date}: {crm_data}. Знайди там вільні вікна та запропонуй їх."
+        instr = f"Ось реальний розклад на {target_date}:\n{crm_data}\nПропонуй тільки цей час."
         
-    return f"Ти адмін салону Rozmary у Львові. Кажи коротко. {instr}"
+    return f"Ти адміністратор салону Rozmary у Львові. Відповідай коротко і ввічливо. {instr}"
 
 def process_message(sender_id, text):
     with get_user_lock(sender_id):
@@ -136,12 +156,8 @@ def process_message(sender_id, text):
         
         if not session or session.get("target_date") != target_date or session_is_expired(session):
             send_tg_notification(f"Клієнт в IG: {text}")
-            log(f"Запит до внутрішнього API на {target_date}...")
+            log(f"Тягну розклад на {target_date}...")
             crm_data = crm.get_free_slots(target_date)
-            
-            # Якщо сирі дані занадто великі для логів, обріжемо їх
-            log_data = crm_data[:500] + "..." if len(crm_data) > 500 else crm_data
-            log(f"Отримані дані: {log_data}")
             
             session = {
                 "target_date": target_date,
@@ -155,14 +171,13 @@ def process_message(sender_id, text):
         trim_messages(session["messages"])
         
         try:
-            # Даємо AI температуру 0.1, щоб він міг трохи подумати над сирим JSON
-            response = client.chat.completions.create(model=OPENAI_MODEL, messages=session["messages"], temperature=0.1)
-            reply = response.choices[0].message.content or "Адмін скоро напише!"
+            response = client.chat.completions.create(model=OPENAI_MODEL, messages=session["messages"], temperature=0.0)
+            reply = response.choices[0].message.content or "Адміністратор скоро напише!"
             session["messages"].append({"role": "assistant", "content": reply})
             
             url = f"https://graph.facebook.com/v18.0/me/messages?access_token={FB_PAGE_ACCESS_TOKEN}"
             requests.post(url, json={"recipient": {"id": sender_id}, "message": {"text": reply}})
-            log("Відповідь успішно надіслана.")
+            log("Відповідь надіслана.")
         except Exception as e: 
             log(f"AI error: {e}")
 
@@ -181,15 +196,7 @@ def webhook():
     return "OK", 200
 
 def log_startup_warnings():
-    missing = []
-    for name, value in [
-        ("FB_PAGE_ACCESS_TOKEN", FB_PAGE_ACCESS_TOKEN),
-        ("OPENAI_API_KEY", OPENAI_API_KEY),
-        ("BINOTEL_EMAIL", BINOTEL_EMAIL),
-        ("BINOTEL_PASSWORD", BINOTEL_PASSWORD),
-    ]:
-        if not value:
-            missing.append(name)
+    missing = [name for name, val in [("FB_PAGE_ACCESS_TOKEN", FB_PAGE_ACCESS_TOKEN), ("OPENAI_API_KEY", OPENAI_API_KEY), ("BINOTEL_API_KEY", BINOTEL_API_KEY), ("BINOTEL_API_SECRET", BINOTEL_API_SECRET)] if not val]
     if missing:
         log(f"⚠️ Startup warning. Missing env vars: {', '.join(missing)}")
 
