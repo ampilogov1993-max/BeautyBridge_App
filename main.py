@@ -74,11 +74,11 @@ class BinotelAPI:
         self.base_url = "https://api.binotel.com/api/2.0"
 
     def generate_signature(self, data):
-        # JSON суворо без пробілів
-        json_data = json.dumps(data, separators=(',', ':'))
+        # JSON суворо без пробілів та з сортуванням ключів
+        json_data = json.dumps(data, separators=(',', ':'), sort_keys=True)
         
-        # ПРАВИЛЬНА ФОРМУЛА: KEY + JSON + SECRET
-        raw = f"{self.key}{json_data}{self.secret}"
+        # ПРАВИЛЬНА ФОРМУЛА: KEY + SECRET + JSON
+        raw = f"{self.key}{self.secret}{json_data}"
         
         signature = hashlib.md5(raw.encode('utf-8')).hexdigest()
         return signature, raw, json_data
