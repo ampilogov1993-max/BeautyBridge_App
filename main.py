@@ -87,7 +87,6 @@ class BinotelAPI:
     def get_free_slots(self, date_str):
         url = f"{self.base_url}/bookon/get-free-times-for-day.json"
 
-        # Сувора типізація: branchId як int, startDate як str
         request_data = {
             "branchId": int(self.branch_id),
             "startDate": str(date_str)
@@ -95,10 +94,11 @@ class BinotelAPI:
 
         signature, raw_string, json_string = self.generate_signature(request_data)
 
+        # ГОЛОВНА ЗМІНА 1: Передаємо requestData як СТРІЧКУ (json_string), а не об'єкт
         payload = {
             "key": self.key,
             "signature": signature,
-            "requestData": request_data
+            "requestData": json_string 
         }
 
         try:
@@ -107,10 +107,10 @@ class BinotelAPI:
             log(f"API SECRET: '{self.secret}'")
             log(f"Signature base string: {raw_string}")
             
+            # ГОЛОВНА ЗМІНА 2: Використовуємо data= замість json= і прибираємо headers
             res = requests.post(
                 url, 
-                json=payload, 
-                headers={"Content-Type": "application/json"},
+                data=payload, 
                 timeout=10
             )
             
