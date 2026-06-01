@@ -1,0 +1,10 @@
+venv/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.json
+*.bak
+nohup.out
+__pycache__/
+.env
