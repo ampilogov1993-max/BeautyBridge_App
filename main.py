@@ -21,6 +21,8 @@ from flask import Flask, request
 from dotenv import load_dotenv
 from openai import OpenAI
 from bocrm_playwright import BOCRMManualAdapter
+from config import BRANDS
+from states import BotState, can_transition
 
 # ======================================================
 # UNIVERSAL INSTAGRAM BOOKING BOT
@@ -68,88 +70,6 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY is missing")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# ======================================================
-# 2. MULTI-CLIENT CONFIG
-# ======================================================
-# IMPORTANT:
-# - page_id must match webhook entry.id or recipient.id from Meta.
-# - sender_id in DB is saved as brand:psid to avoid mixing chats.
-# - For every new salon/client, add a new block here.
-
-BRANDS = {
-    "rozmary": {
-        "enabled": True,
-        "name": "Rozmary",
-        "city": "Львів",
-        "language": "uk",
-        "page_id": os.getenv("ROZMARY_PAGE_ID", ""),
-        "page_access_token": os.getenv("ROZMARY_PAGE_ACCESS_TOKEN", ""),
-        "telegram_chat_id": os.getenv("ROZMARY_ADMIN_CHAT_ID", GLOBAL_ADMIN_CHAT_ID),
-        "address": "Вул. Донцова 9, фасадний вхід",
-        "phone": "0977646741",
-        "wifi": "Internet-5G",
-        "wifi_password": "internet1",
-        "prepayment_required": True,
-        "prepayment_amount": 200,
-        "card_number": os.getenv("ROZMARY_CARD_NUMBER", ""),
-        "card_name": os.getenv("ROZMARY_CARD_NAME", ""),
-        "crm_type": "bookon",
-        "crm_config": {
-            "widget_id": os.getenv("ROZMARY_WIDGET_ID", ""),
-            "branch_id": os.getenv("ROZMARY_BRANCH_ID", ""),
-            "bookon_session": os.getenv("ROZMARY_BOOKON_SESSION", ""),
-        },
-    },
-
-    "space": {
-        "enabled": True,
-        "name": "Space",
-        "city": "Львів",
-        "language": "uk",
-        "page_id": os.getenv("SPACE_PAGE_ID", ""),
-        "page_access_token": os.getenv("SPACE_PAGE_ACCESS_TOKEN", ""),
-        "telegram_chat_id": os.getenv("SPACE_ADMIN_CHAT_ID", GLOBAL_ADMIN_CHAT_ID),
-        "address": os.getenv("SPACE_ADDRESS", "Адреса Space"),
-        "phone": os.getenv("SPACE_PHONE", ""),
-        "wifi": os.getenv("SPACE_WIFI", ""),
-        "wifi_password": os.getenv("SPACE_WIFI_PASSWORD", ""),
-        "prepayment_required": True,
-        "prepayment_amount": int(os.getenv("SPACE_PREPAYMENT_AMOUNT", "200")),
-        "card_number": os.getenv("SPACE_CARD_NUMBER", ""),
-        "card_name": os.getenv("SPACE_CARD_NAME", ""),
-        # Space works in the same Bookon/BOCRM account network as Rozmary,
-        # but has a separate Instagram page. If Bookon uses the same widget/session/branch,
-        # leave SPACE_* empty and it will fall back to ROZMARY_* values.
-        "crm_type": "bookon",
-        "crm_config": {
-            "widget_id": os.getenv("SPACE_WIDGET_ID", os.getenv("ROZMARY_WIDGET_ID", "")),
-            "branch_id": os.getenv("SPACE_BRANCH_ID", os.getenv("ROZMARY_BRANCH_ID", "")),
-            "bookon_session": os.getenv("SPACE_BOOKON_SESSION", os.getenv("ROZMARY_BOOKON_SESSION", "")),
-        },
-    },
-
-    # TEMPLATE FOR FUTURE CLIENTS:
-    # "client_key": {
-    #     "enabled": True,
-    #     "name": "Client Name",
-    #     "city": "Львів",
-    #     "language": "uk",
-    #     "page_id": "META_PAGE_OR_IG_ID",
-    #     "page_access_token": "EAAG...",
-    #     "telegram_chat_id": "-100...",
-    #     "address": "...",
-    #     "phone": "...",
-    #     "wifi": "...",
-    #     "wifi_password": "...",
-    #     "prepayment_required": True,
-    #     "prepayment_amount": 200,
-    #     "card_number": "...",
-    #     "card_name": "...",
-    #     "crm_type": "manual",  # bookon / google_calendar / easyweek / manual
-    #     "crm_config": {},
-    # },
-}
 
 # ======================================================
 # 3. SERVICES, MASTERS, PRICES PER BRAND
@@ -1112,8 +1032,8 @@ class BookonCRMAdapter(BaseCRMAdapter):
         # Але НЕ блокуємо запис якщо не вдалось — Bookon сам створить клієнта по телефону
         # Використовуємо Playwright BOCRM API замість віджету
         adapter = BOCRMManualAdapter(
-            email=os.getenv("BOCRM_EMAIL", "ksyushashuldina@gmail.com"),
-            password=os.getenv("BOCRM_PASSWORD", "0632510267da"),
+            email=os.getenv("BOCRM_EMAIL"),
+            password=os.getenv("BOCRM_PASSWORD"),
             branch_id=self.branch_id
         )
         
@@ -1355,9 +1275,10 @@ def block_address_if_not_paid(brand, bot_reply, state):
         return bot_reply
 
     cfg = get_brand_cfg(brand)
-    protected_words = [
+    if not cfg.get("block_address_if_not_paid", True):
+        return bot_reply
+    protected_words = list(cfg.get("protected_words", [])) + [
         cfg.get("address", ""), cfg.get("phone", ""), cfg.get("wifi", ""), cfg.get("wifi_password", ""),
-        "Донцова 9", "0977646741", "Internet-5G", "internet1",
     ]
 
     cleaned = bot_reply
