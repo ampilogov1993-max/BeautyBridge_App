@@ -445,7 +445,7 @@
 </section>
 
 <!-- PRODUCT -->
-<section id="product" class="relative py-24 bg-navy-950 overflow-hidden">
+<section class="relative py-24 bg-navy-950 overflow-hidden">
   <div class="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
     <div class="text-center mb-16 reveal">
       <span class="font-mono text-electric-400 text-xs tracking-widest uppercase mb-3 block">Про продукт</span>
@@ -534,7 +534,7 @@
 </section>
 
 <!-- FAQ -->
-<section id="faq" class="relative py-24 bg-navy-950 overflow-hidden">
+<section class="relative py-24 bg-navy-950 overflow-hidden">
   <div class="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
     <div class="text-center mb-16 reveal">
       <span class="font-mono text-electric-400 text-xs tracking-widest uppercase mb-3 block">Питання</span>
@@ -603,7 +603,7 @@
         <h3 class="font-display font-bold text-2xl text-white mb-1">Базовий</h3>
         <p class="text-slate-400 text-sm mb-5">ШІ-Асистент</p>
         <div class="flex items-end gap-1 mb-6">
-          <span class="font-display font-black text-4xl text-white">49$</span>
+          <span class="font-display font-black text-4xl text-white">100€</span>
           <span class="text-slate-400 mb-1">/міс</span>
         </div>
         <ul class="space-y-3 mb-8 flex-1">
@@ -623,7 +623,7 @@
         <h3 class="font-display font-bold text-2xl text-white mb-1">Стандарт</h3>
         <p class="text-slate-400 text-sm mb-5">Повна автоматизація</p>
         <div class="flex items-end gap-1 mb-6">
-          <span class="font-display font-black text-4xl text-white">99$</span>
+          <span class="font-display font-black text-4xl text-white">150€</span>
           <span class="text-slate-400 mb-1">/міс</span>
         </div>
         <ul class="space-y-3 mb-8 flex-1">
@@ -643,7 +643,7 @@
         <h3 class="font-display font-bold text-2xl text-white mb-1">Безліміт</h3>
         <p class="text-slate-400 text-sm mb-5">Кастомні рішення</p>
         <div class="flex items-end gap-1 mb-6">
-          <span class="font-display font-black text-4xl text-white">150$</span>
+          <span class="font-display font-black text-4xl text-white">200€</span>
           <span class="text-slate-400 mb-1">/міс</span>
         </div>
         <ul class="space-y-3 mb-8 flex-1">
@@ -752,7 +752,7 @@
 </section>
 
 <!-- FINAL CTA -->
-<section id="final-cta" class="relative py-24 bg-navy-950 overflow-hidden">
+<section class="relative py-24 bg-navy-950 overflow-hidden">
   <div class="hero-orb w-96 h-96 bg-electric-500 opacity-15 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 animate-pulse-glow"></div>
   <div class="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
     <div class="border-animated rounded-3xl p-10 sm:p-14 reveal">
@@ -1536,69 +1536,6 @@
       const privacyLabel = ctSection.querySelector('label[for="privacy"]'); if (privacyLabel) privacyLabel.innerHTML = t.ct_privacy;
       const submitText = ctSection.querySelector('#submitText'); if (submitText) submitText.textContent = t.ct_btn;
       const submitLoading = ctSection.querySelector('#submitLoading'); if (submitLoading) submitLoading.textContent = t.ct_loading;
-    }
-
-    // Product section
-    const prodSection = document.getElementById('product');
-    if (prodSection) {
-      const tag = prodSection.querySelector('.font-mono'); if (tag) tag.textContent = t.prod_tag;
-      const h2 = prodSection.querySelector('h2'); if (h2) h2.innerHTML = t.prod_title;
-      const ps = prodSection.querySelectorAll('p.text-slate-300, p.text-slate-400');
-      if (ps[0]) ps[0].innerHTML = t.prod_p1;
-      if (ps[1]) ps[1].innerHTML = t.prod_p2;
-      if (ps[2]) ps[2].innerHTML = t.prod_p3;
-    }
-
-    // How it works section
-    const howSection = document.getElementById('how-it-works');
-    if (howSection) {
-      const tag = howSection.querySelector('.font-mono'); if (tag) tag.textContent = t.how_tag;
-      const h2 = howSection.querySelector('h2'); if (h2) h2.innerHTML = t.how_title;
-      const sub = howSection.querySelector('p.text-slate-400'); if (sub) sub.textContent = t.how_sub;
-      const steps = howSection.querySelectorAll('.card-hover');
-      const howData = [
-        { t: 'how1_t', p: 'how1_p', ls: ['how1_l1','how1_l2','how1_l3'] },
-        { t: 'how2_t', p: 'how2_p', ls: ['how2_l1','how2_l2','how2_l3'] },
-        { t: 'how3_t', p: 'how3_p', ls: ['how3_l1','how3_l2','how3_l3'] },
-      ];
-      steps.forEach((step, i) => {
-        if (!howData[i]) return;
-        const h3 = step.querySelector('h3'); if (h3) h3.textContent = t[howData[i].t];
-        const p = step.querySelector('p.text-slate-300'); if (p) p.textContent = t[howData[i].p];
-        const lis = step.querySelectorAll('li');
-        howData[i].ls.forEach((lk, j) => { if (lis[j]) lis[j].textContent = t[lk]; });
-      });
-    }
-
-    // FAQ section
-    const faqSection = document.getElementById('faq');
-    if (faqSection) {
-      const tag = faqSection.querySelector('.font-mono'); if (tag) tag.textContent = t.faq_tag;
-      const h2 = faqSection.querySelector('h2'); if (h2) h2.innerHTML = t.faq_title;
-      const items = faqSection.querySelectorAll('details');
-      const faqData = [
-        ['faq1_q','faq1_a'], ['faq2_q','faq2_a'], ['faq3_q','faq3_a'],
-        ['faq4_q','faq4_a'], ['faq5_q','faq5_a'],
-      ];
-      items.forEach((item, i) => {
-        if (!faqData[i]) return;
-        const span = item.querySelector('summary span'); if (span) span.textContent = t[faqData[i][0]];
-        const p = item.querySelector('p'); if (p) p.innerHTML = t[faqData[i][1]];
-      });
-    }
-
-    // Final CTA section
-    const finSection = document.getElementById('final-cta');
-    if (finSection) {
-      const tag = finSection.querySelector('.font-mono'); if (tag) tag.textContent = t.fin_tag;
-      const h2 = finSection.querySelector('h2'); if (h2) h2.innerHTML = t.fin_title;
-      const sub = finSection.querySelector('p.text-slate-300'); if (sub) sub.textContent = t.fin_sub;
-    }
-
-    // Footer
-    const footer = document.querySelector('footer');
-    if (footer) {
-      const rights = footer.querySelector('p.text-slate-500'); if (rights) rights.innerHTML = t.footer_rights;
     }
 
     // Sync both selectors
